@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Tax summary · AIG</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Receipts">
+<meta name="theme-color" content="#1f5f8b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js"></script>
+</head>
+<body>
+<main>
+<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <h1 style="margin:0">T2125 expense summary, <span id="yr"></span></h1>
+    <div class="row">
+      <select id="year" style="width:auto"></select>
+      <a class="btn" id="sumcsv">Summary CSV</a>
+      <a class="btn" href="/api/export/workbook.xlsx">Excel workbook</a>
+      <a class="btn primary" id="zip">Accountant package (.zip)</a>
+    </div>
+  </div>
+  <div id="flags" style="margin-top:12px"></div>
+</div>
+<div class="card table-wrap">
+  <table>
+    <thead><tr><th>Expense type</th><th>CRA line</th><th class="num">Receipts</th><th class="num">Paid (CAD)</th><th class="num">Deductible</th><th class="num" id="pa"></th><th class="num" id="pb"></th></tr></thead>
+    <tbody id="lines"></tbody>
+    <tfoot id="foot"></tfoot>
+  </table>
+  <div id="extra"></div>
+  <p class="small muted">Each partner reports their share on their own T2125 with their T1 return. Meals and entertainment are limited to 50%. Check the figures with your accountant before filing.</p>
+</div>
+</main>
+<script>
+const { $, api, esc, money, toast, params } = AIG;
+AIG.header("/summary.html");
+async function load(year) {
+  const d = await api("/summary" + (year ? "?year=" + year : ""));
+  const s = d.settings;
+  $("#biz").textContent = s.business_name + " expenses";
+  $("#yr").textContent = d.year;
+  const ys = d.years.includes(d.year) ? d.years : [d.year, ...d.years];
+  $("#year").innerHTML = ys.map((y) => `<option ${y === d.year ? "selected" : ""}>${y}</option>`).join("");
+  $("#sumcsv").href = "/api/export/summary.csv?year=" + d.year;
+  $("#zip").href = "/api/export/package.zip?year=" + d.year;
+  $("#pa").textContent = `${s.partner_a_name} ${s.partner_a_pct}%`; $("#pb").textContent = `${s.partner_b_name} ${s.partner_b_pct}%`;
+  const flags = [];
+  if (d.needs_review) flags.push(`${d.needs_review} expense(s) are not confirmed yet. <a href="/expenses.html?year=${d.year}&status=review">Review them</a> before you file.`);
+  if (d.missing_gst_number) flags.push(`${d.missing_gst_number} receipt(s) of $30 or more have GST but no supplier GST number. CRA needs that number to allow the input tax credit.`);
+  if (d.foreign_no_rate) flags.push(`${d.foreign_no_rate} expense(s) are in a foreign currency with no exchange rate set, so they're counted 1:1.`);
+  if (d.missing_date) flags.push(`${d.missing_date} expense(s) have no date.`);
+  $("#flags").innerHTML = flags.map((f) => `<div class="notice">${f}</div>`).join("");
+  $("#lines").innerHTML = d.lines.length ? d.lines.map((l) => `<tr><td>${esc(l.type)}</td><td>${l.line} <span class="muted small hide-sm">${esc(l.name)}</span></td>
+    <td class="num">${l.count}</td><td class="num">${money(l.total_cad)}</td><td class="num">${money(l.deductible_cad)}</td>
+    <td class="num">${money(l.partner_a)}</td><td class="num">${money(l.partner_b)}</td></tr>`).join("")
+    : `<tr><td colspan="7" class="muted">No expenses for ${d.year}.</td></tr>`;
+  $("#foot").innerHTML = `<tr><th>Total business expenses</th><th>9368</th><th></th><th></th><th class="num">${money(d.total_deductible)}</th><th class="num">${money(d.partner_a)}</th><th class="num">${money(d.partner_b)}</th></tr>`;
+  let extra = "";
+  if (d.capital) extra += `<p class="small" style="margin-top:12px"><strong>Equipment (line 9936, capital cost allowance):</strong> ${d.capital.count} item(s), ${money(d.capital.deductible_cad)} CAD business portion. These are claimed through CCA over several years, not expensed in full, so they are left out of the total above.</p>`;
+  if (s.gst_registered === "yes") extra += `<p class="small"><strong>GST/HST input tax credits:</strong> ${money(d.total_itc)} CAD.</p>`;
+  $("#extra").innerHTML = extra;
+}
+$("#year").onchange = (e) => load(e.target.value).catch((x) => toast(x.message, 6000));
+load(params.get("year")).catch((e) => toast(e.message, 6000));
+</script>
+</body>
+</html>

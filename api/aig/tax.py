@@ -138,7 +138,7 @@ def ledger_csv(rows, settings: dict) -> str:
             cat.type, cat.line, cat.name, row["currency"], row["fx_rate"], row["subtotal"] if row["subtotal"] is not None else "",
             row["gst"], row["pst"], row["tip"], row["total"] if row["total"] is not None else "", c.total_cad,
             row["business_pct"], c.deductible_cad, c.itc_cad, row["gst_number"] or "",
-            row["payment_method"] or "", row["paid_by"] or "", row["source"], row["source_file"] or "",
+            row["payment_method"] or "", row["paid_by"] or "", row["source"], row["source_path"] or "",
             row["status"], row["notes"] or "",
         ])
     return out.getvalue()

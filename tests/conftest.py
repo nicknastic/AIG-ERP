@@ -1,27 +1,22 @@
-import importlib
+import sys
+from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))
 
-def _load(tmp_path, monkeypatch, **env):
-    monkeypatch.setenv("EXPENSES_DATA_DIR", str(tmp_path))
-    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "MS_CLIENT_ID", "MS_CLIENT_SECRET", "ALLOWED_EMAILS",
-              "SESSION_SECRET", "WEBSITE_SITE_NAME", "PUBLIC_URL", "MS_TENANT"):
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from aig import store
+    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "GRAPH_CLIENT_ID", "ALLOWED_EMAILS",
+              "WEBSITE_SITE_NAME", "WEBSITE_INSTANCE_ID", "CONFIG_PATH"):
         monkeypatch.delenv(k, raising=False)
-    for k, v in env.items():
-        monkeypatch.setenv(k, v)
-    from expenses import db, main
-    importlib.reload(db)
-    importlib.reload(main)
-    db.init_db()
-    return db, main
-
-
-@pytest.fixture
-def app_env(tmp_path, monkeypatch):
-    return _load(tmp_path, monkeypatch)
-
-
-@pytest.fixture
-def make_app(tmp_path, monkeypatch):
-    return lambda **env: _load(tmp_path, monkeypatch, **env)
+    store.reset_store(store.LocalStore(tmp_path))
+    from aig.app import app
+    with TestClient(app) as c:
+        c.root = tmp_path
+        yield c
+    store.reset_store(None)

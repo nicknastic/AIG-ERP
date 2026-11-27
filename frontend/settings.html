@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Settings · AIG</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Receipts">
+<meta name="theme-color" content="#1f5f8b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js"></script>
+</head>
+<body>
+<main>
+<div class="card" style="max-width:640px">
+  <h1>Settings</h1>
+  <form id="f">
+    <div><label>Business name</label><input name="business_name" required></div>
+    <h2 style="margin-top:18px">Folders</h2>
+    <p class="small muted" style="margin-top:0" id="where"></p>
+    <div><label>Receipt photos folder</label><input name="receipts_folder" required></div>
+    <p class="small muted" style="margin:3px 0 0">Photos are filed by year, named like “2026-03-02 Cactus Club - Entertainment business development - 17.jpg”.</p>
+    <div style="margin-top:10px"><label>Excel workbook folder</label><input name="excel_folder" required></div>
+    <p class="small muted" style="margin:3px 0 0">The workbook is the record of every expense. You can fix vendors, dates, amounts, CRA line, status and notes directly in Excel; the type, CRA category and totals are recalculated by the app.</p>
+    <h2 style="margin-top:18px">Partners</h2>
+    <div class="grid">
+      <div><label>Partner 1</label><input name="partner_a_name" required></div>
+      <div><label>Share %</label><input type="number" step="0.01" min="0" max="100" name="partner_a_pct" required></div>
+      <div><label>Partner 2</label><input name="partner_b_name" required></div>
+      <div><label>Share %</label><input type="number" step="0.01" min="0" max="100" name="partner_b_pct" required></div>
+    </div>
+    <div style="margin-top:10px"><label>Registered for GST/HST?</label>
+      <select name="gst_registered">
+        <option value="no">No, GST is part of the expense</option>
+        <option value="yes">Yes, we claim input tax credits</option>
+      </select>
+    </div>
+    <p style="margin-top:14px" class="row"><button class="primary" type="submit">Save</button><button type="button" id="rebuild">Rewrite Excel now</button></p>
+  </form>
+  <p class="small muted" id="info"></p>
+</div>
+</main>
+<script>
+const { $, api, post, esc, toast } = AIG;
+AIG.header("/settings.html");
+async function load() {
+  const c = await api("/config");
+  const f = $("#f");
+  for (const [k, v] of Object.entries(c.settings)) if (f.elements[k]) f.elements[k].value = v;
+  $("#biz").textContent = c.settings.business_name + " expenses";
+  $("#where").textContent = c.storage === "onedrive"
+    ? "Folder paths inside the connected document library, for example “AIG Expenses/Receipts”."
+    : "Folder paths inside the app's local data folder (development mode).";
+  $("#info").innerHTML = `Receipts go to: ${esc(c.receipts_location)}<br>Workbook: ${esc(c.excel_location)}<br>Automatic receipt reading: ${c.extraction ? "on" : "off (set ANTHROPIC_API_KEY)"}`;
+}
+$("#f").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  try {
+    const r = await post("/settings", Object.fromEntries(new FormData($("#f"))));
+    toast("Saved." + (r.moved ? ` Moved ${r.moved} receipt(s) to the new folder.` : ""));
+    load();
+  } catch (e) { toast(e.message, 7000); }
+});
+$("#rebuild").onclick = async () => {
+  try { const r = await post("/rebuild", {}); toast("Excel rewritten: " + r.path); } catch (e) { toast(e.message, 7000); }
+};
+load().catch((e) => toast(e.message, 6000));
+</script>
+</body>
+</html>

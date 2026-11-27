@@ -1,73 +1,57 @@
-# Hosting on Azure
+# Hosting on Azure Static Web Apps (Free)
 
-The app runs on **Azure App Service** (Linux, Python), so Nick and Marija can
-use it from their phones anywhere. It goes in the Azure subscription of the
-**adriaticintelligence.com** directory. Sign-in is with your
-adriaticintelligence.com work accounts (only that directory, and only the emails
-in `ALLOWED_EMAILS`). Receipt photos and the Excel workbook are saved to a
-folder in the connected OneDrive for Business.
+Everything runs in the **adriaticintelligence.com** Azure directory:
 
-Why App Service and not Static Web Apps: Static Web Apps serves static pages,
-and its built-in API can't keep the database or files between requests. This
-app needs a small always-running server, which is what App Service is for.
-
-## Cost
-
-- **B1** plan (default): about US$13 a month, always awake.
-- **F1** plan: free, but it falls asleep when idle, so the first page after a
-  break can take 20 to 30 seconds. Use `SKU=F1` in the setup command to try it.
-- Reading receipts with Claude: roughly a cent or two each.
-
-## One-time setup (about 10 minutes)
-
-1. Sign in at <https://portal.azure.com> with your adriaticintelligence.com
-   account. If you have several directories, check the top-right corner shows
-   Adriatic Intelligence (account icon > Switch directory). Open **Cloud Shell**
-   (the `>_` icon at the top) and choose **Bash**.
-2. Upload `deploy/setup-azure.sh` (Cloud Shell toolbar > Manage files > Upload),
-   then run, with your own app name and emails:
-
-   ```bash
-   APP_NAME=aig-expenses \
-   ALLOWED_EMAILS="nick@adriaticintelligence.com,marija@adriaticintelligence.com" \
-   bash setup-azure.sh
-   ```
-
-   It checks you're in the adriaticintelligence.com directory, asks for your
-   Anthropic API key (for reading receipts), and if you have more than one
-   subscription you can add `SUBSCRIPTION="<name>"` to pick it. `APP_NAME`
-   becomes the address, so it must be unused across all of Azure.
-3. Follow the last lines it prints: add the publish profile as the GitHub
-   secret `AZURE_WEBAPP_PUBLISH_PROFILE` and the app name as the GitHub variable
-   `AZURE_WEBAPP_NAME`.
-4. In GitHub, open **Actions > Deploy to Azure > Run workflow**. Every push to
-   `main` deploys from then on, after the tests pass.
-5. Open `https://<APP_NAME>.azurewebsites.net`, sign in, open **Settings** and
-   press **Connect OneDrive**. Pick the folders for receipts and the Excel file
-   (defaults: `AIG Expenses/Receipts` and `AIG Expenses/Excel`).
-6. On each iPhone: open `https://<APP_NAME>.azurewebsites.net/snap` in Safari,
-   then **Share > Add to Home Screen**.
-
-## Where things live
-
-- **OneDrive** (the account that pressed Connect): receipt photos, filed by
-  year, and one Excel workbook per year. Marija's receipts go to the same
-  OneDrive. Share the folder with her in OneDrive if she wants to browse it.
-- **App Service storage** (`/home/data`): the app's database (expense details,
-  settings). It persists across restarts and deploys. The Excel workbook is a
-  full copy of it, refreshed after every change.
-- If OneDrive can't be reached when a receipt is snapped, the photo is kept on
-  the server and moved to OneDrive the next time that expense is saved.
-
-## Changing settings later
-
-Portal > your web app > **Settings > Environment variables**:
-
-| Setting | What it is |
+| Piece | What it is |
 |---|---|
-| `ALLOWED_EMAILS` | Who can sign in, comma-separated |
-| `ANTHROPIC_API_KEY` | Key for reading receipts |
-| `MS_CLIENT_ID`, `MS_CLIENT_SECRET` | The sign-in app registration (secret expires in 2 years) |
-| `MS_TENANT` | The adriaticintelligence.com directory ID, so only its accounts can sign in |
-| `SESSION_SECRET` | Signs the login cookie. Changing it signs everyone out |
-| `PUBLIC_URL` | The site address, used for the sign-in redirect |
+| Resource group | `aig-expenses-rg` (West US 2) in subscription *sub-ai-readiness* |
+| Static Web App | `aig-expenses`, Free tier: <https://green-water-082a1fe1e.5.azurestaticapps.net> |
+| Website | `frontend/`: plain HTML and JavaScript, served by the Static Web App |
+| API | `api/`: Python Azure Functions (FastAPI), managed by the Static Web App |
+| Records | The Excel workbook, `AIG Expenses/AIG Expenses.xlsx` by default |
+| Receipt photos | `AIG Expenses/Receipts/<year>/…` by default |
+| Settings | `AIG Expenses/settings.json` |
+
+The workbook, photos and settings live in one Microsoft 365 document library
+(the "AIG Expenses" SharePoint site, or a OneDrive). Nothing is stored in the
+Static Web App itself, so the whole setup stays on the free tier. The only
+running cost is reading receipts with Claude, roughly a cent or two each.
+
+## Sign-in
+
+Static Web Apps signs people in with Microsoft Entra ID (`/.auth/login/aad`).
+Every page and API call requires a signed-in user (`frontend/staticwebapp.config.json`),
+and the API additionally only accepts the emails in `ALLOWED_EMAILS`.
+
+## App settings (Static Web App > Settings > Environment variables)
+
+| Setting | Value |
+|---|---|
+| `ALLOWED_EMAILS` | `nick@adriaticintelligence.com,marija@adriaticintelligence.com` |
+| `GRAPH_TENANT_ID` | The adriaticintelligence.com directory ID |
+| `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET` | The "AIG expenses" app registration (secret expires in 2 years) |
+| `SHAREPOINT_SITE_ID` | The "AIG Expenses" SharePoint site (app has `Sites.Selected` on that site only) |
+| `ONEDRIVE_USER` | Alternative to the site: a person's OneDrive (needs the broader `Files.ReadWrite.All`) |
+| `ANTHROPIC_API_KEY` | Key for reading receipts. Without it, details are typed in by hand |
+
+## Deploying
+
+The workflow `.github/workflows/azure-static-web-app.yml` runs the tests and
+deploys `frontend/` and `api/` on every push to `main`. It needs one GitHub
+secret, `AZURE_STATIC_WEB_APPS_API_TOKEN`, the Static Web App's deployment token:
+
+```powershell
+az staticwebapp secrets list -n aig-expenses -g aig-expenses-rg --query properties.apiKey -o tsv
+```
+
+Add it under GitHub > Settings > Secrets and variables > Actions.
+
+## Limits of the Free tier to know about
+
+- API calls time out after 45 seconds. Reading one receipt takes a few seconds,
+  and the site uploads several files one at a time, so this is fine.
+- The API sleeps when unused; the first call after a quiet spell takes a few seconds.
+- Two people saving at the very same moment is handled: the second save retries.
+- If the workbook is open for editing in Excel at the moment a receipt is
+  saved, OneDrive/SharePoint may refuse the write; the app says so and you try
+  again after closing it.
