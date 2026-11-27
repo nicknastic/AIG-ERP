@@ -56,6 +56,20 @@ def test_login_required_and_allowed_emails(make_app, monkeypatch):
         assert c.get("/", follow_redirects=False).status_code == 303
 
 
+def test_work_tenant_and_mail_differs_from_upn(make_app, monkeypatch):
+    _, main = make_app(**dict(LOGIN_ENV, MS_TENANT="adriaticintelligence.com",
+                              ALLOWED_EMAILS="nick@adriaticintelligence.com"))
+    monkeypatch.setattr(main.auth, "token_request", lambda data: {"access_token": "at"})
+    monkeypatch.setattr(main.auth, "_me", lambda at: {"userPrincipalName": "nnastic@adriaticintelligence.onmicrosoft.com",
+                                                      "mail": "Nick@adriaticintelligence.com"})
+    with TestClient(main.app, base_url="https://testserver") as c:
+        r = c.get("/login", follow_redirects=False)
+        assert r.headers["location"].startswith("https://login.microsoftonline.com/adriaticintelligence.com/")
+        state = r.headers["location"].split("state=")[1].split("&")[0]
+        assert c.get(f"/auth/callback?code=x&state={state}", follow_redirects=False).status_code == 303
+        assert c.get("/").status_code == 200
+
+
 def test_callback_rejects_bad_state(make_app, monkeypatch):
     _, main = make_app(**LOGIN_ENV)
     with TestClient(main.app, base_url="https://testserver") as c:

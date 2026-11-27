@@ -1,9 +1,11 @@
 # Hosting on Azure
 
 The app runs on **Azure App Service** (Linux, Python), so Nick and Marija can
-use it from their phones anywhere. Sign-in is with your Microsoft accounts and
-only the emails in `ALLOWED_EMAILS` get in. Receipt photos and the Excel
-workbook are saved to a OneDrive folder.
+use it from their phones anywhere. It goes in the Azure subscription of the
+**adriaticintelligence.com** directory. Sign-in is with your
+adriaticintelligence.com work accounts (only that directory, and only the emails
+in `ALLOWED_EMAILS`). Receipt photos and the Excel workbook are saved to a
+folder in the connected OneDrive for Business.
 
 Why App Service and not Static Web Apps: Static Web Apps serves static pages,
 and its built-in API can't keep the database or files between requests. This
@@ -18,18 +20,23 @@ app needs a small always-running server, which is what App Service is for.
 
 ## One-time setup (about 10 minutes)
 
-1. Sign in at <https://portal.azure.com> and open **Cloud Shell** (the `>_`
-   icon at the top), choosing **Bash**.
+1. Sign in at <https://portal.azure.com> with your adriaticintelligence.com
+   account. If you have several directories, check the top-right corner shows
+   Adriatic Intelligence (account icon > Switch directory). Open **Cloud Shell**
+   (the `>_` icon at the top) and choose **Bash**.
 2. Upload `deploy/setup-azure.sh` (Cloud Shell toolbar > Manage files > Upload),
    then run, with your own app name and emails:
 
    ```bash
-   APP_NAME=aig-expenses-nick \
-   ALLOWED_EMAILS="nick@outlook.com,marija@example.com" \
+   APP_NAME=aig-expenses \
+   ALLOWED_EMAILS="nick@adriaticintelligence.com,marija@adriaticintelligence.com" \
    bash setup-azure.sh
    ```
 
-   It asks for your Anthropic API key (for reading receipts).
+   It checks you're in the adriaticintelligence.com directory, asks for your
+   Anthropic API key (for reading receipts), and if you have more than one
+   subscription you can add `SUBSCRIPTION="<name>"` to pick it. `APP_NAME`
+   becomes the address, so it must be unused across all of Azure.
 3. Follow the last lines it prints: add the publish profile as the GitHub
    secret `AZURE_WEBAPP_PUBLISH_PROFILE` and the app name as the GitHub variable
    `AZURE_WEBAPP_NAME`.
@@ -61,5 +68,6 @@ Portal > your web app > **Settings > Environment variables**:
 | `ALLOWED_EMAILS` | Who can sign in, comma-separated |
 | `ANTHROPIC_API_KEY` | Key for reading receipts |
 | `MS_CLIENT_ID`, `MS_CLIENT_SECRET` | The sign-in app registration (secret expires in 2 years) |
+| `MS_TENANT` | The adriaticintelligence.com directory ID, so only its accounts can sign in |
 | `SESSION_SECRET` | Signs the login cookie. Changing it signs everyone out |
 | `PUBLIC_URL` | The site address, used for the sign-in redirect |

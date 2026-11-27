@@ -4,8 +4,9 @@ Environment variables (set as App Service application settings on Azure):
 
     MS_CLIENT_ID      Application (client) ID of the app registration
     MS_CLIENT_SECRET  A client secret of that app registration
-    MS_TENANT         'common' (default) allows personal Microsoft accounts such as outlook.com
-    ALLOWED_EMAILS    Comma-separated list, e.g. nick@outlook.com,marija@example.com
+    MS_TENANT         Directory (tenant) ID or domain, e.g. adriaticintelligence.com. 'common' (default)
+                      would also allow personal Microsoft accounts.
+    ALLOWED_EMAILS    Comma-separated list, e.g. nick@adriaticintelligence.com,marija@adriaticintelligence.com
     SESSION_SECRET    Long random string used to sign the login cookie
     PUBLIC_URL        e.g. https://aig-expenses.azurewebsites.net (used for the sign-in redirect)
 
@@ -156,7 +157,9 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "",
         me = _me(tokens["access_token"])
     except httpx.HTTPError:
         return _error_page("Couldn't read your Microsoft profile.")
-    email = _email(me)
+    # Work accounts can have a sign-in name (UPN) that differs from their email; accept either.
+    candidates = {(me.get("mail") or "").lower(), (me.get("userPrincipalName") or "").lower()} - {""}
+    email = next((c for c in candidates if c in allowed_emails()), _email(me))
     if email not in allowed_emails():
         request.session.clear()
         return _error_page(f"{email or 'This account'} isn't allowed to use this site.", 403)
