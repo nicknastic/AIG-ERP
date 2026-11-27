@@ -118,7 +118,7 @@ def summarize(rows, settings: dict, year: int | None) -> Summary:
 
 
 LEDGER_COLUMNS = [
-    "id", "date", "vendor", "description", "t2125_line", "category", "currency", "fx_rate",
+    "id", "date", "vendor", "description", "expense_type", "t2125_line", "category", "currency", "fx_rate",
     "subtotal", "gst_hst", "pst", "tip", "total", "total_cad", "business_use_pct",
     "deductible_cad", "itc_cad", "supplier_gst_number", "payment_method", "paid_by",
     "source", "receipt_file", "status", "notes",
@@ -135,7 +135,7 @@ def ledger_csv(rows, settings: dict) -> str:
         cat = category_for(row["category_line"])
         w.writerow([
             row["id"], row["expense_date"] or "", row["vendor"] or "", row["description"] or "",
-            cat.line, cat.name, row["currency"], row["fx_rate"], row["subtotal"] if row["subtotal"] is not None else "",
+            cat.type, cat.line, cat.name, row["currency"], row["fx_rate"], row["subtotal"] if row["subtotal"] is not None else "",
             row["gst"], row["pst"], row["tip"], row["total"] if row["total"] is not None else "", c.total_cad,
             row["business_pct"], c.deductible_cad, c.itc_cad, row["gst_number"] or "",
             row["payment_method"] or "", row["paid_by"] or "", row["source"], row["source_file"] or "",
@@ -146,18 +146,21 @@ def ledger_csv(rows, settings: dict) -> str:
 
 def summary_csv(s: Summary, settings: dict) -> str:
     a, b = settings.get("partner_a_name", "Partner A"), settings.get("partner_b_name", "Partner B")
+    reg = settings.get("gst_registered", "no") == "yes"
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow(["T2125 line", "Category", "Receipts", "Total paid (CAD)", "Deductible (CAD)",
-                f"{a} share", f"{b} share", "GST/HST ITCs"])
+    w.writerow(["Expense type", "T2125 line", "Category", "Receipts", "Total paid (CAD)", "Deductible (CAD)",
+                f"{a} share", f"{b} share"] + (["GST/HST ITCs"] if reg else []))
     for lt in s.lines:
-        w.writerow([lt.line, lt.name, lt.count, lt.total_cad, lt.deductible_cad, lt.partner_a, lt.partner_b, lt.itc_cad])
-    w.writerow(["9368", "Total business expenses", sum(l.count for l in s.lines), "",
-                s.total_deductible, s.partner_a, s.partner_b, ""])
+        w.writerow([category_for(lt.line).type, lt.line, lt.name, lt.count, lt.total_cad, lt.deductible_cad,
+                    lt.partner_a, lt.partner_b] + ([lt.itc_cad] if reg else []))
+    w.writerow(["Total business expenses", "9368", "", sum(l.count for l in s.lines), "",
+                s.total_deductible, s.partner_a, s.partner_b])
     if s.capital:
         w.writerow([])
-        w.writerow([CCA_LINE, "Capital purchases (CCA calculated separately, not included above)",
-                    s.capital.count, s.capital.total_cad, s.capital.deductible_cad, "", "", s.capital.itc_cad])
-    w.writerow([])
-    w.writerow(["", "Total GST/HST input tax credits (for the GST/HST return)", "", "", "", "", "", s.total_itc])
+        w.writerow(["Equipment", CCA_LINE, "Capital purchases (CCA calculated separately, not included above)",
+                    s.capital.count, s.capital.total_cad, s.capital.deductible_cad])
+    if reg:
+        w.writerow([])
+        w.writerow(["Total GST/HST input tax credits (for the GST/HST return)", "", "", "", "", "", "", "", s.total_itc])
     return out.getvalue()

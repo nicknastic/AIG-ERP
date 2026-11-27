@@ -2,7 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Receipts">
+<meta name="theme-color" content="#1f5f8b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
 <title>{% block title %}Expenses{% endblock %} · {{ settings.business_name if settings else "AIG" }}</title>
 <style>
 :root { --bg:#f7f7f5; --card:#fff; --ink:#1d1d1b; --muted:#6b6b66; --line:#e3e3de; --accent:#1f5f8b; --warn:#a35a00; --ok:#2f7a3d; --bad:#a3261f; }
@@ -27,7 +34,7 @@ button.primary, .btn.primary { background:var(--accent); border-color:var(--acce
 button.danger { color:var(--bad); }
 input, select, textarea { font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink); width:100%; }
 label { display:block; font-size:13px; color:var(--muted); margin-bottom:3px; }
-.grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(170px, 1fr)); gap:12px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:12px; }
 .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
 .split { display:grid; grid-template-columns: 1fr 1fr; gap:16px; } @media (max-width: 800px) { .split { grid-template-columns: 1fr; } .hide-sm { display:none; } }
 .drop { border:2px dashed var(--line); border-radius:10px; padding:20px; text-align:center; }
@@ -35,15 +42,33 @@ label { display:block; font-size:13px; color:var(--muted); margin-bottom:3px; }
 .receipt img { max-width:100%; border-radius:8px; border:1px solid var(--line); }
 .receipt iframe { width:100%; height:75vh; border:1px solid var(--line); border-radius:8px; }
 .table-wrap { overflow-x:auto; }
+.snap-btn { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; width:100%; min-height:42vh; border-radius:16px; background:var(--accent); color:#fff; font-size:22px; font-weight:600; cursor:pointer; border:none; text-align:center; padding:20px; }
+.snap-btn svg { width:72px; height:72px; }
+.snap-btn input { display:none; }
+.busy { display:none; text-align:center; padding:30px 10px; font-size:18px; }
+.busy.on { display:block; }
+.spinner { width:42px; height:42px; border:4px solid var(--line); border-top-color:var(--accent); border-radius:50%; margin:0 auto 14px; animation:spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.list-plain { list-style:none; padding:0; margin:0; } .list-plain li { padding:9px 0; border-bottom:1px solid var(--line); } .list-plain a { color:inherit; text-decoration:none; display:flex; justify-content:space-between; gap:10px; }
+@media (max-width: 800px) {
+  header { gap:12px; padding:10px 16px; font-size:15px; } header strong { width:100%; }
+  .split .form-col { order:-1; }
+  input, select, textarea { font-size:16px; }  /* stops iPhone zooming into fields */
+  button, .btn { padding:11px 16px; }
+}
 </style>
 </head>
 <body>
 <header>
   <strong>{{ settings.business_name if settings else "AIG" }} expenses</strong>
+  <a href="/snap">Snap receipt</a>
   <a href="/">Expenses</a>
   <a href="/summary">Tax summary</a>
   <a href="/settings">Settings</a>
 </header>
-<main>{% block content %}{% endblock %}</main>
+<main>
+{% if excel_warning() %}<div class="notice">{{ excel_warning() }}</div>{% endif %}
+{% block content %}{% endblock %}
+</main>
 </body>
 </html>

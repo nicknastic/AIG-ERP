@@ -1,21 +1,22 @@
-"""Web app: upload receipts and emails, review what was read, export for tax time."""
+"""Web app: snap receipts from a phone, review what was read, keep the Excel file and export for tax time."""
 
 import hashlib
 import io
 import json
 import mimetypes
-import re
 import zipfile
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from . import db, emails, extract, tax
+from . import db, emails, excel, extract, storage, tax
 from .categories import CATEGORIES, category_for
+
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -28,6 +29,21 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.globals["categories"] = CATEGORIES
 templates.env.globals["category_for"] = category_for
 
+# Last problem writing the Excel file, shown at the top of every page until a write succeeds.
+_excel_status: dict[str, str | None] = {"warning": None}
+templates.env.globals["excel_warning"] = lambda: _excel_status["warning"]
+
+
+def refresh_excel(*years) -> None:
+    warning = None
+    for y in {int(str(y)[:4]) for y in years if y and str(y)[:4].isdigit()}:
+        warning = excel.write_safely(y) or warning
+    _excel_status["warning"] = warning
+
+
+def _year(date_str) -> int | None:
+    return int(date_str[:4]) if date_str and date_str[:4].isdigit() else None
+
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 EMAIL_EXTS = {".eml", ".msg"}
 
@@ -38,17 +54,6 @@ def _media_type(filename: str, declared: str | None) -> str:
     if ext in {".heic", ".heif"}:
         return "image/heic"
     return guessed or declared or "application/octet-stream"
-
-
-def _safe_name(filename: str) -> str:
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).name)[-80:]
-    return stem or "file"
-
-
-def _store(raw: bytes, filename: str, digest: str) -> str:
-    name = f"{digest[:12]}_{_safe_name(filename)}"
-    (db.receipts_dir() / name).write_bytes(raw)
-    return name
 
 
 def _from_extraction(fields: dict) -> dict:
@@ -75,9 +80,9 @@ def ingest(raw: bytes, filename: str, declared_type: str | None) -> dict:
     if existing:
         return {"file": filename, "status": "duplicate", "id": existing["id"]}
 
-    ext = Path(filename).suffix.lower()
-    stored = _store(raw, filename, digest)
-    record: dict = {"source_file": stored, "source_hash": digest, "status": "review", "paid_by": "business"}
+    ext = Path(filename).suffix.lower() or mimetypes.guess_extension(declared_type or "") or ".jpg"
+    stored = storage.save_incoming(raw, digest, ".jpg" if ext == ".jpeg" else ext)
+    record: dict = {"source_file": str(stored), "source_hash": digest, "status": "review", "paid_by": "business"}
     error = None
 
     try:
@@ -107,6 +112,8 @@ def ingest(raw: bytes, filename: str, declared_type: str | None) -> dict:
         record["notes"] = "No Anthropic API key set, so fill in the details by hand."
     record.setdefault("source", "receipt")
     expense_id = db.insert_expense(record)
+    storage.file_into_place(expense_id)
+    refresh_excel(record.get("expense_date"))
     return {"file": filename, "status": "error" if error else "added", "id": expense_id, "error": error}
 
 
@@ -127,7 +134,7 @@ def index(request: Request, year: str = "", status: str = ""):
 
 
 @app.post("/upload", response_class=HTMLResponse)
-async def upload(request: Request, files: list[UploadFile] = File(...)):
+async def upload(request: Request, files: list[UploadFile] = File(...), next: str = Form("")):
     results = []
     for f in files:
         raw = await f.read()
@@ -137,7 +144,51 @@ async def upload(request: Request, files: list[UploadFile] = File(...)):
             results.append({"file": f.filename, "status": "error", "error": "File is larger than 25 MB"})
             continue
         results.append(ingest(raw, f.filename or "upload", f.content_type))
+    if next == "capture" and len(results) == 1 and results[0].get("id"):
+        return RedirectResponse(f"/expenses/{results[0]['id']}?snapped={results[0]['status']}", status_code=303)
     return templates.TemplateResponse(request, "uploaded.html", {"results": results})
+
+
+@app.get("/snap", response_class=HTMLResponse)
+def snap(request: Request):
+    recent = db.list_expenses()[:5]
+    return templates.TemplateResponse(request, "snap.html", {
+        "settings": db.get_settings(), "recent": recent, "extraction": extract.extraction_available(),
+    })
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    name = f"{db.get_settings()['business_name']} receipts"
+    return Response(json.dumps({
+        "name": name, "short_name": "Receipts", "start_url": "/snap", "display": "standalone",
+        "background_color": "#f7f7f5", "theme_color": "#1f5f8b",
+        "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml"}],
+    }), media_type="application/manifest+json")
+
+
+ICON_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180"><rect width="180" height="180" rx="36" '
+            'fill="#1f5f8b"/><path d="M55 40h70v100l-12-8-12 8-11-8-12 8-11-8-12 8z" fill="#fff"/>'
+            '<path d="M70 70h40M70 88h40M70 106h25" stroke="#1f5f8b" stroke-width="7" stroke-linecap="round"/></svg>')
+
+
+@app.get("/icon.svg")
+def icon():
+    return Response(ICON_SVG, media_type="image/svg+xml")
+
+
+@app.get("/apple-touch-icon.png")
+def apple_icon():
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (180, 180), "#1f5f8b")
+    d = ImageDraw.Draw(img)
+    d.polygon([(55, 40), (125, 40), (125, 140), (113, 132), (101, 140), (90, 132), (78, 140), (67, 132), (55, 140)], fill="white")
+    for y, x2 in ((70, 110), (88, 110), (106, 95)):
+        d.line([(70, y), (x2, y)], fill="#1f5f8b", width=7)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return Response(buf.getvalue(), media_type="image/png")
 
 
 @app.post("/expenses/new")
@@ -150,14 +201,16 @@ def new_expense():
 
 
 @app.get("/expenses/{expense_id}", response_class=HTMLResponse)
-def edit_expense(request: Request, expense_id: int):
+def edit_expense(request: Request, expense_id: int, snapped: str = ""):
     row = db.get_expense(expense_id)
     if not row:
         raise HTTPException(404)
     settings = db.get_settings()
     media = mimetypes.guess_type(row["source_file"] or "")[0] or ""
+    if (row["source_file"] or "").lower().endswith((".heic", ".heif")):
+        media = "image/heic"
     return templates.TemplateResponse(request, "edit.html", {
-        "e": row, "settings": settings, "media": media,
+        "e": row, "settings": settings, "media": media, "snapped": snapped,
         "c": tax.compute(row, settings["gst_registered"] == "yes"),
     })
 
@@ -179,7 +232,8 @@ def save_expense(
     category_line: str = Form("9270"), business_pct: int = Form(100), gst_number: str = Form(""),
     notes: str = Form(""), action: str = Form("save"),
 ):
-    if not db.get_expense(expense_id):
+    before = db.get_expense(expense_id)
+    if not before:
         raise HTTPException(404)
     try:
         data = {
@@ -207,6 +261,8 @@ def save_expense(
     elif action == "unconfirm":
         data["status"] = "review"
     db.update_expense(expense_id, data)
+    storage.file_into_place(expense_id)
+    refresh_excel(before["expense_date"], data["expense_date"])
     if action == "confirm":
         nxt = next((r for r in db.list_expenses(status="review") if r["id"] != expense_id), None)
         if nxt:
@@ -221,18 +277,17 @@ def remove_expense(expense_id: int):
     if row:
         db.delete_expense(expense_id)
         if row["source_file"]:
-            others = db.find_by_hash(row["source_hash"] or "")
-            if not others:
-                (db.receipts_dir() / row["source_file"]).unlink(missing_ok=True)
+            Path(row["source_file"]).unlink(missing_ok=True)
+        refresh_excel(row["expense_date"])
     return RedirectResponse("/", status_code=303)
 
 
-@app.get("/receipts/{name}")
-def receipt_file(name: str):
-    path = (db.receipts_dir() / name).resolve()
-    if path.parent != db.receipts_dir().resolve() or not path.is_file():
+@app.get("/expenses/{expense_id}/receipt")
+def receipt_file(expense_id: int):
+    row = db.get_expense(expense_id)
+    if not row or not row["source_file"] or not Path(row["source_file"]).is_file():
         raise HTTPException(404)
-    return FileResponse(path)
+    return FileResponse(row["source_file"])
 
 
 @app.get("/summary", response_class=HTMLResponse)
@@ -278,10 +333,11 @@ def export_package(year: str):
         z.writestr(f"t2125-summary-{y}.csv", "﻿" + tax.summary_csv(s, settings))
         z.writestr(f"expenses-{y}.csv", "﻿" + tax.ledger_csv(rows, settings))
         for r in rows:
-            if r["source_file"]:
-                p = db.receipts_dir() / r["source_file"]
-                if p.is_file():
-                    z.write(p, f"receipts/{r['expense_date'] or 'undated'}_{r['id']}_{r['source_file']}")
+            if r["source_file"] and Path(r["source_file"]).is_file():
+                z.write(r["source_file"], f"receipts/{Path(r['source_file']).name}")
+        xlsx = io.BytesIO()
+        excel.build(y).save(xlsx)
+        z.writestr(excel.workbook_path(y).name, xlsx.getvalue())
     return Response(
         buf.getvalue(), media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="expenses-{y}-package.zip"'},
@@ -289,22 +345,65 @@ def export_package(year: str):
 
 
 @app.get("/settings", response_class=HTMLResponse)
-def settings_page(request: Request, saved: str = ""):
+def settings_page(request: Request, saved: str = "", error: str = ""):
     return templates.TemplateResponse(request, "settings.html", {
-        "settings": db.get_settings(), "saved": bool(saved), "extraction": extract.extraction_available(),
+        "settings": db.get_settings(), "saved": saved, "error": error,
+        "extraction": extract.extraction_available(),
+        "receipts_path": str(db.receipts_dir()), "excel_path": str(db.excel_dir()),
     })
+
+
+def _check_folder(value: str) -> str | None:
+    """Return an error message if the folder can't be used."""
+    if not value:
+        return None
+    p = Path(value).expanduser()
+    if not p.is_absolute():
+        return f"Use a full folder path, for example C:\\Users\\Nick\\OneDrive\\Receipts or /Users/nick/Receipts. Got: {value}"
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+        probe = p / ".write-test"
+        probe.write_text("ok")
+        probe.unlink()
+    except OSError as e:
+        return f"Can't write to {p}: {e.strerror or e}"
+    return None
 
 
 @app.post("/settings")
 def save_settings_route(
     business_name: str = Form(...), partner_a_name: str = Form(...), partner_a_pct: float = Form(...),
     partner_b_name: str = Form(...), partner_b_pct: float = Form(...), gst_registered: str = Form("no"),
+    receipts_folder: str = Form(""), excel_folder: str = Form(""),
 ):
     if round(partner_a_pct + partner_b_pct, 4) != 100:
         raise HTTPException(400, "Partner shares must add up to 100%")
+    receipts_folder, excel_folder = receipts_folder.strip().strip('"'), excel_folder.strip().strip('"')
+    for folder in (receipts_folder, excel_folder):
+        err = _check_folder(folder)
+        if err:
+            return RedirectResponse("/settings?" + urlencode({"error": err}), status_code=303)
+    old_receipts = db.receipts_dir().resolve()
     db.save_settings({
+        "receipts_folder": receipts_folder, "excel_folder": excel_folder,
         "business_name": business_name.strip(), "partner_a_name": partner_a_name.strip(),
         "partner_a_pct": f"{partner_a_pct:g}", "partner_b_name": partner_b_name.strip(),
         "partner_b_pct": f"{partner_b_pct:g}", "gst_registered": "yes" if gst_registered == "yes" else "no",
     })
-    return RedirectResponse("/settings?saved=1", status_code=303)
+    moved = 0
+    if db.receipts_dir().resolve() != old_receipts:
+        # Bring existing receipts along so everything lives in the new folder.
+        for r in db.list_expenses():
+            if r["source_file"] and Path(r["source_file"]).is_file():
+                storage.file_into_place(r["id"])
+                moved += 1
+    refresh_excel(*db.years())
+    msg = "Saved." + (f" Moved {moved} receipt(s) to the new folder." if moved else "")
+    return RedirectResponse("/settings?" + urlencode({"saved": msg}), status_code=303)
+
+
+@app.post("/excel/rebuild")
+def rebuild_excel():
+    refresh_excel(*(db.years() or [date.today().year]))
+    msg = _excel_status["warning"] or f"Excel updated in {db.excel_dir()}"
+    return RedirectResponse("/settings?" + urlencode({"saved": msg}), status_code=303)

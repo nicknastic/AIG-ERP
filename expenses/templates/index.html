@@ -37,15 +37,14 @@
   {% if items %}
   <div class="table-wrap">
   <table>
-    <thead><tr><th>Date</th><th>Vendor</th><th class="hide-sm">Category</th><th class="num">Total</th><th class="num hide-sm">GST/HST</th><th class="num">Deductible</th><th>Status</th></tr></thead>
+    <thead><tr><th>Date</th><th>Vendor</th><th class="hide-sm">Expense type</th><th class="num">Total</th><th class="num">Deductible</th><th>Status</th></tr></thead>
     <tbody>
     {% for e, c in items %}
       <tr class="clickable" onclick="location.href='/expenses/{{ e.id }}'">
         <td>{{ e.expense_date or "?" }}</td>
         <td>{{ e.vendor or e.email_subject or "(not read yet)" }}<div class="muted small">{{ e.description or "" }}</div></td>
-        <td class="hide-sm small">{{ category_for(e.category_line).line }} {{ category_for(e.category_line).name }}</td>
+        <td class="hide-sm small">{{ category_for(e.category_line).type }}<div class="muted">CRA line {{ e.category_line }}</div></td>
         <td class="num">{{ "%.2f"|format(e.total or 0) }}{% if e.currency != "CAD" %} {{ e.currency }}{% endif %}</td>
-        <td class="num hide-sm">{{ "%.2f"|format(e.gst or 0) }}</td>
         <td class="num">{{ "%.2f"|format(c.deductible_cad) }}</td>
         <td><span class="pill {{ e.status }}">{{ "Confirmed" if e.status == "confirmed" else "Review" }}</span>
           {% if e.confidence == "low" %}<span class="pill low">check</span>{% endif %}</td>

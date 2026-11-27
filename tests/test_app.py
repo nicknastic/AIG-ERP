@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from email.message import EmailMessage
 
 from fastapi.testclient import TestClient
@@ -66,7 +67,7 @@ def test_upload_with_extraction(app_env, monkeypatch):
         s = client.get("/summary?year=2026")
         assert s.status_code == 200 and "8810" in s.text
         csv = client.get("/export/summary.csv?year=2026").text
-        assert "Office expenses" in csv and "21.4" in csv
+        assert "Office expenses" in csv and "22.4" in csv and "ITC" not in csv  # not GST registered
         z = client.get("/export/package.zip?year=2026")
         assert z.status_code == 200 and z.content[:2] == b"PK"
         assert client.get("/export/ledger.csv").status_code == 200
@@ -100,10 +101,56 @@ def test_settings_and_manual_entry(app_env):
         assert r.status_code == 303 and len(db.list_expenses()) == 1
 
 
-def test_receipt_path_traversal_blocked(app_env):
+def test_receipt_served_by_id_only(app_env):
     _, main = app_env
     with TestClient(main.app) as client:
         assert client.get("/receipts/..%2Fexpenses.db").status_code == 404
+        assert client.get("/expenses/999/receipt").status_code == 404
+
+
+def test_snap_flow_folders_and_excel(app_env, monkeypatch, tmp_path):
+    db, main = app_env
+    from openpyxl import load_workbook
+    receipts, xl = tmp_path / "My Receipts", tmp_path / "My Excel"
+    monkeypatch.setattr(main.extract, "extraction_available", lambda: True)
+    monkeypatch.setattr(main.extract, "extract_from_file", lambda data, media: dict(
+        FAKE, vendor="Cactus Club", category_line="8523", total=84.0, gst=3.75, pst=0, expense_date="2026-03-02"))
+    with TestClient(main.app) as client:
+        assert "Take a photo" in client.get("/snap").text
+        assert client.get("/manifest.webmanifest").json()["start_url"] == "/snap"
+        assert client.get("/apple-touch-icon.png").content[:4] == b"\x89PNG"
+        r = client.post("/settings", data={
+            "business_name": "AIG", "partner_a_name": "Nick", "partner_a_pct": "50", "partner_b_name": "Marija",
+            "partner_b_pct": "50", "gst_registered": "no", "receipts_folder": str(receipts), "excel_folder": str(xl)})
+        assert r.status_code == 200 and "Saved" in r.text
+        r = client.post("/upload", data={"next": "capture"},
+                        files=[("files", ("IMG_0001.jpg", PNG, "image/jpeg"))], follow_redirects=False)
+        assert r.status_code == 303 and "snapped=added" in r.headers["location"]
+        e = db.list_expenses()[0]
+        assert e["source_file"].startswith(str(receipts / "2026"))
+        assert "Cactus Club - Entertainment business development" in e["source_file"]
+        assert client.get(f"/expenses/{e['id']}/receipt").status_code == 200
+        page = client.get(r.headers["location"]).text
+        assert "Entertainment / business development" in page
+
+        wb = load_workbook(xl / "AIG Expenses 2026.xlsx")
+        ws = wb["Expenses"]
+        assert ws["B2"].value == "Cactus Club" and ws["D2"].value == "Entertainment / business development"
+        assert ws["N2"].value == 42.0  # not GST registered: 50% of the full 84.00
+        assert wb["Summary"]["A2"].value == "Entertainment / business development"
+
+        # editing the vendor renames the file and updates the workbook
+        client.post(f"/expenses/{e['id']}", data={
+            "vendor": "Earls", "expense_date": "2026-03-02", "total": "84", "gst": "3.75",
+            "category_line": "8523", "business_pct": "100", "action": "save"})
+        e = db.get_expense(e["id"])
+        assert "Earls" in e["source_file"] and Path(e["source_file"]).is_file()
+        assert load_workbook(xl / "AIG Expenses 2026.xlsx")["Expenses"]["B2"].value == "Earls"
+
+        bad = client.post("/settings", data={
+            "business_name": "AIG", "partner_a_name": "Nick", "partner_a_pct": "50", "partner_b_name": "Marija",
+            "partner_b_pct": "50", "receipts_folder": "relative/path"})
+        assert "full folder path" in bad.text
 
 
 def test_extract_schema_and_blocks():

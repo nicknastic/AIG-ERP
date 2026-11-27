@@ -1,23 +1,27 @@
 {% extends "base.html" %}
 {% block title %}{{ e.vendor or "Expense" }}{% endblock %}
 {% block content %}
+{% if snapped == "added" %}<div class="notice" style="border-color:var(--ok)">Receipt saved{% if e.vendor %} and read as <strong>{{ category_for(e.category_line).type }}</strong>{% endif %}. Check the details and tap Confirm.</div>
+{% elif snapped == "duplicate" %}<div class="notice">This photo was already uploaded, so here is the existing expense.</div>
+{% elif snapped == "error" %}<div class="notice">The photo was saved but couldn't be read automatically. Please fill in the details.</div>{% endif %}
 <div class="split">
   <div class="card receipt">
     {% if e.source_file %}
       {% if media.startswith("image/") and media not in ("image/heic", "image/heif") %}
-        <img src="/receipts/{{ e.source_file }}" alt="Receipt">
+        <a href="/expenses/{{ e.id }}/receipt" target="_blank"><img src="/expenses/{{ e.id }}/receipt" alt="Receipt"></a>
       {% elif media == "application/pdf" %}
-        <iframe src="/receipts/{{ e.source_file }}"></iframe>
+        <iframe src="/expenses/{{ e.id }}/receipt"></iframe>
       {% else %}
-        <p><a href="/receipts/{{ e.source_file }}">Open original file</a></p>
+        <p><a href="/expenses/{{ e.id }}/receipt">Open original file</a></p>
       {% endif %}
     {% else %}
       <p class="muted">Entered by hand, no receipt attached.</p>
     {% endif %}
+    {% if e.source_file %}<p class="small muted" style="word-break:break-all">Saved as {{ e.source_file }}</p>{% endif %}
     {% if e.email_subject %}<p class="small"><strong>Email:</strong> {{ e.email_subject }}<br><span class="muted">{{ e.email_from }}</span></p>{% endif %}
   </div>
 
-  <div class="card">
+  <div class="card form-col">
     <h1>{{ e.vendor or "New expense" }} <span class="pill {{ e.status }}">{{ "Confirmed" if e.status == "confirmed" else "Review" }}</span></h1>
     {% if e.notes %}<div class="notice small">{{ e.notes }}</div>{% endif %}
     <form method="post" action="/expenses/{{ e.id }}">
@@ -26,14 +30,15 @@
         <div><label>Date</label><input type="date" name="expense_date" value="{{ e.expense_date or '' }}"></div>
       </div>
       <div style="margin-top:10px"><label>What was it for</label><input name="description" value="{{ e.description or '' }}"></div>
-      <div style="margin-top:10px"><label>CRA category (T2125 line)</label>
+      <div style="margin-top:10px"><label>Expense type</label>
         <select name="category_line">
-          {% for c in categories %}<option value="{{ c.line }}" {% if c.line == e.category_line %}selected{% endif %}>{{ c.line }} · {{ c.name }}{% if c.deductible_pct < 100 %} ({{ c.deductible_pct }}% deductible){% endif %}</option>{% endfor %}
+          {% for c in categories|sort(attribute="type") %}<option value="{{ c.line }}" {% if c.line == e.category_line %}selected{% endif %}>{{ c.type }} (CRA line {{ c.line }}){% if c.deductible_pct < 100 %}, {{ c.deductible_pct }}% deductible{% endif %}</option>{% endfor %}
         </select>
+        <div class="small muted" style="margin-top:3px">On the tax form: {{ category_for(e.category_line).name }}</div>
       </div>
       <div class="grid" style="margin-top:10px">
         <div><label>Subtotal</label><input name="subtotal" inputmode="decimal" value="{{ e.subtotal if e.subtotal is not none else '' }}"></div>
-        <div><label>GST / HST</label><input name="gst" inputmode="decimal" value="{{ e.gst }}"></div>
+        <div><label>GST / HST{% if settings.gst_registered != "yes" %} (part of the cost){% endif %}</label><input name="gst" inputmode="decimal" value="{{ e.gst }}"></div>
         <div><label>PST</label><input name="pst" inputmode="decimal" value="{{ e.pst }}"></div>
         <div><label>Tip</label><input name="tip" inputmode="decimal" value="{{ e.tip }}"></div>
         <div><label>Total paid</label><input name="total" inputmode="decimal" value="{{ e.total if e.total is not none else '' }}"></div>
@@ -42,7 +47,7 @@
         <div><label>Business use %</label><input type="number" min="0" max="100" name="business_pct" value="{{ e.business_pct }}"></div>
       </div>
       <div class="grid" style="margin-top:10px">
-        <div><label>Supplier GST/HST number</label><input name="gst_number" value="{{ e.gst_number or '' }}"></div>
+        {% if settings.gst_registered == "yes" %}<div><label>Supplier GST/HST number</label><input name="gst_number" value="{{ e.gst_number or '' }}"></div>{% else %}<input type="hidden" name="gst_number" value="{{ e.gst_number or '' }}">{% endif %}
         <div><label>Payment method</label><input name="payment_method" value="{{ e.payment_method or '' }}"></div>
         <div><label>Paid by</label>
           <select name="paid_by">

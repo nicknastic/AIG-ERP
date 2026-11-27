@@ -21,18 +21,18 @@
 
 <div class="card table-wrap">
   <table>
-    <thead><tr><th>Line</th><th>Category</th><th class="num">Receipts</th><th class="num">Paid (CAD)</th><th class="num">Deductible</th><th class="num">{{ settings.partner_a_name }} {{ settings.partner_a_pct }}%</th><th class="num">{{ settings.partner_b_name }} {{ settings.partner_b_pct }}%</th></tr></thead>
+    <thead><tr><th>Expense type</th><th>CRA line</th><th class="num">Receipts</th><th class="num">Paid (CAD)</th><th class="num">Deductible</th><th class="num">{{ settings.partner_a_name }} {{ settings.partner_a_pct }}%</th><th class="num">{{ settings.partner_b_name }} {{ settings.partner_b_pct }}%</th></tr></thead>
     <tbody>
     {% for l in s.lines %}
-      <tr><td>{{ l.line }}</td><td>{{ l.name }}</td><td class="num">{{ l.count }}</td><td class="num">{{ "%.2f"|format(l.total_cad) }}</td><td class="num">{{ "%.2f"|format(l.deductible_cad) }}</td><td class="num">{{ "%.2f"|format(l.partner_a) }}</td><td class="num">{{ "%.2f"|format(l.partner_b) }}</td></tr>
+      <tr><td>{{ category_for(l.line).type }}</td><td>{{ l.line }} <span class="muted small">{{ l.name }}</span></td><td class="num">{{ l.count }}</td><td class="num">{{ "%.2f"|format(l.total_cad) }}</td><td class="num">{{ "%.2f"|format(l.deductible_cad) }}</td><td class="num">{{ "%.2f"|format(l.partner_a) }}</td><td class="num">{{ "%.2f"|format(l.partner_b) }}</td></tr>
     {% else %}
       <tr><td colspan="7" class="muted">No expenses for {{ year }}.</td></tr>
     {% endfor %}
     </tbody>
-    <tfoot><tr><th>9368</th><th>Total business expenses</th><th></th><th></th><th class="num">{{ "%.2f"|format(s.total_deductible) }}</th><th class="num">{{ "%.2f"|format(s.partner_a) }}</th><th class="num">{{ "%.2f"|format(s.partner_b) }}</th></tr></tfoot>
+    <tfoot><tr><th>Total business expenses</th><th>9368</th><th></th><th></th><th class="num">{{ "%.2f"|format(s.total_deductible) }}</th><th class="num">{{ "%.2f"|format(s.partner_a) }}</th><th class="num">{{ "%.2f"|format(s.partner_b) }}</th></tr></tfoot>
   </table>
   {% if s.capital %}
-  <p class="small" style="margin-top:12px"><strong>Capital purchases (line 9936):</strong> {{ s.capital.count }} item(s), {{ "%.2f"|format(s.capital.deductible_cad) }} CAD business portion. These are claimed through CCA over several years, not expensed in full, so they are left out of the total above.</p>
+  <p class="small" style="margin-top:12px"><strong>Equipment (line 9936, capital cost allowance):</strong> {{ s.capital.count }} item(s), {{ "%.2f"|format(s.capital.deductible_cad) }} CAD business portion. These are claimed through CCA over several years, not expensed in full, so they are left out of the total above.</p>
   {% endif %}
   {% if settings.gst_registered == "yes" %}
   <p class="small"><strong>GST/HST input tax credits:</strong> {{ "%.2f"|format(s.total_itc) }} CAD. These go on the partnership's GST/HST return, and the amounts above already exclude them.</p>

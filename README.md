@@ -6,6 +6,18 @@ the numbers each partner needs for their T2125 at tax time.
 
 ## What it does
 
+- **Snap receipts from the iPhone browser**: open the site in Safari, tap
+  *Take a photo of the receipt*, and the photo is saved and read straight away.
+  No App Store app needed. Tip: in Safari use **Share > Add to Home Screen** so
+  it opens like an app.
+- **Receipt photos folder and Excel folder** are set in **Settings**. Photos are
+  filed by year with descriptive names, for example
+  `2026/2026-03-02 Cactus Club - Entertainment business development - 17.jpg`.
+  An Excel workbook per year (`AIG Expenses 2026.xlsx`) is rewritten after every
+  change, with an *Expenses* sheet and a *Summary* sheet split by partner.
+- **Expense types**: each receipt is classified as Travel, Equipment,
+  Entertainment / business development, Office expenses, Phone and internet,
+  Vehicle, and so on. Each type maps to a CRA T2125 line.
 - **Upload receipts**: phone photos (JPEG, PNG, HEIC) and PDFs, many at once.
 - **Upload email receipts**: save the email as `.eml` (Outlook on the web: open
   the message, then **... > Download > Download as EML**) and upload it. Images
@@ -20,9 +32,9 @@ the numbers each partner needs for their T2125 at tax time.
   vehicle, 9936 CCA, and so on).
 - **Tax rules applied**:
   - Meals and entertainment are limited to 50%.
-  - If the partnership is GST-registered, GST/HST is taken out of the expense
-    and totalled separately as input tax credits for the GST/HST return.
-    BC PST is not recoverable, so it stays in the expense.
+  - The partnership is not GST-registered (the default), so GST and PST are
+    part of each expense. If that changes, one switch in Settings splits GST
+    out as input tax credits instead.
   - Business-use percentage per expense (for example a phone used 60% for work).
   - Foreign-currency receipts take an exchange rate.
   - Capital purchases (line 9936) are listed separately because they are
@@ -36,8 +48,10 @@ the numbers each partner needs for their T2125 at tax time.
   package (.zip) with both CSVs plus every receipt file for the year.
 - **Duplicates**: uploading the same file twice is caught.
 
-Receipts and the database stay on your computer in the `data/` folder. CRA
-expects records to be kept for six years, so back that folder up.
+The database stays in the `data/` folder; receipts and Excel files go to the
+folders chosen in Settings (default `data/receipts` and `data/excel`). CRA
+expects records to be kept for six years, so pick a folder that is backed up,
+such as a OneDrive folder.
 
 ## Run it
 
@@ -54,9 +68,17 @@ uvicorn expenses.main:app --reload
 
 Open <http://localhost:8000>.
 
-To upload straight from your phone on the same Wi-Fi, start it with
-`uvicorn expenses.main:app --host 0.0.0.0` and open `http://<your-computer's-IP>:8000`
-on the phone. There is no login yet, so only do this on a home network you trust.
+### Using it from the iPhone
+
+Start it so other devices on your Wi-Fi can reach it:
+
+```bash
+uvicorn expenses.main:app --host 0.0.0.0 --port 8000
+```
+
+Then on the iPhone open `http://<your-computer's-IP>:8000/snap` in Safari and
+add it to the Home Screen. There is no login yet, so only do this on a home
+network you trust.
 
 ### Automatic reading
 

@@ -47,7 +47,7 @@ SCHEMA = {
 
 
 def _system_prompt() -> str:
-    cats = "\n".join(f"- {c.line} {c.name}: {c.hint}" for c in CATEGORIES)
+    cats = "\n".join(f"- {c.line} {c.type} (CRA: {c.name}): {c.hint}" for c in CATEGORIES)
     return f"""You read receipts, invoices and bills for a small Canadian business \
 (a general partnership in British Columbia) so they can be claimed as business \
 expenses on CRA form T2125. Today is {date.today().isoformat()}.
@@ -59,6 +59,7 @@ Extract the fields exactly as printed. Rules:
 - Dates: if the year is missing or ambiguous, choose the most recent plausible date not in the future, and say so in notes.
 - Choose the single best T2125 line:
 {cats}
+- Restaurant meals, coffee with clients and entertainment are 8523 (business development).
 - Equipment such as computers, phones, furniture or vehicles that lasts more than a year goes to 9936 (CCA).
 - Software subscriptions and cloud services go to 9270 unless a better line clearly fits.
 - Set confidence to low if the image is blurry, cut off, or amounts don't add up."""

@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS expenses (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     source          TEXT NOT NULL,            -- 'receipt', 'email', 'manual'
-    source_file     TEXT,                     -- stored file name under data/receipts
+    source_file     TEXT,                     -- full path of the saved receipt file
     source_hash     TEXT,                     -- sha256 of the original file, to catch duplicates
     email_subject   TEXT,
     email_from      TEXT,
@@ -51,8 +51,10 @@ DEFAULT_SETTINGS = {
     "partner_a_pct": "50",
     "partner_b_name": "Marija",
     "partner_b_pct": "50",
-    "gst_registered": "yes",
+    "gst_registered": "no",
     "province": "BC",
+    "receipts_folder": "",  # where receipt photos are saved; empty = data/receipts
+    "excel_folder": "",     # where the Excel workbook is kept; empty = data/excel
 }
 
 
@@ -60,10 +62,19 @@ def db_path() -> Path:
     return DATA_DIR / "expenses.db"
 
 
-def receipts_dir() -> Path:
-    d = DATA_DIR / "receipts"
+def _folder(setting: str, default: Path) -> Path:
+    value = get_settings().get(setting, "").strip()
+    d = Path(value).expanduser() if value else default
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def receipts_dir() -> Path:
+    return _folder("receipts_folder", DATA_DIR / "receipts")
+
+
+def excel_dir() -> Path:
+    return _folder("excel_folder", DATA_DIR / "excel")
 
 
 @contextmanager
