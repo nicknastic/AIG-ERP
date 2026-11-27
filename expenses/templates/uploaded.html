@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h1>Upload results</h1>
+  <table>
+    <thead><tr><th>File</th><th>Result</th><th></th></tr></thead>
+    <tbody>
+    {% for r in results %}
+      <tr>
+        <td>{{ r.file }}</td>
+        <td>{% if r.status == "added" %}<span class="pill confirmed">Added</span>
+            {% elif r.status == "duplicate" %}<span class="pill review">Already uploaded</span>
+            {% else %}<span class="pill low">Needs attention</span> <span class="small muted">{{ r.error }}</span>{% endif %}</td>
+        <td>{% if r.id %}<a href="/expenses/{{ r.id }}">Review</a>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="row" style="margin-top:14px">
+    {% set first = (results | selectattr("id") | list | first) %}
+    {% if first %}<a class="btn primary" href="/expenses/{{ first.id }}">Start reviewing</a>{% endif %}
+    <a class="btn" href="/">Back to all expenses</a>
+  </p>
+</div>
+{% endblock %}

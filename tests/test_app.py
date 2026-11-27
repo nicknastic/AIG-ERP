@@ -1,0 +1,113 @@
+import json
+from email.message import EmailMessage
+
+from fastapi.testclient import TestClient
+
+PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+       b"\x00\x00\x00\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82")
+
+FAKE = {
+    "is_receipt": True, "vendor": "Staples", "expense_date": "2026-02-14", "description": "Printer paper",
+    "currency": "CAD", "subtotal": 20.0, "gst": 1.0, "pst": 1.4, "tip": 0, "total": 22.4,
+    "payment_method": "Visa", "gst_number": "R123456789", "category_line": "8810", "confidence": "high", "notes": None,
+}
+
+
+def make_eml() -> bytes:
+    m = EmailMessage()
+    m["Subject"] = "Your Zoom receipt"
+    m["From"] = "billing@zoom.us"
+    m.set_content("Zoom Pro monthly, total $21.00 CAD incl. GST $1.00")
+    m.add_attachment(PNG, maintype="image", subtype="png", filename="invoice.png")
+    return bytes(m)
+
+
+def test_upload_without_key_creates_review_item(app_env):
+    db, main = app_env
+    with TestClient(main.app) as client:
+        r = client.post("/upload", files=[("files", ("r.png", PNG, "image/png"))])
+        assert r.status_code == 200 and "Added" in r.text
+        rows = db.list_expenses()
+        assert len(rows) == 1 and rows[0]["status"] == "review"
+        # same file again is caught as duplicate
+        r = client.post("/upload", files=[("files", ("copy.png", PNG, "image/png"))])
+        assert "Already uploaded" in r.text
+        assert len(db.list_expenses()) == 1
+
+
+def test_upload_with_extraction(app_env, monkeypatch):
+    db, main = app_env
+    monkeypatch.setattr(main.extract, "extraction_available", lambda: True)
+    monkeypatch.setattr(main.extract, "extract_from_file", lambda data, media: dict(FAKE))
+    seen = {}
+
+    def fake_email(subject, sender, body, atts):
+        seen.update(subject=subject, sender=sender, body=body, n=len(atts))
+        return dict(FAKE, vendor="Zoom", category_line="9270", total=21.0, gst=1.0, pst=0)
+
+    monkeypatch.setattr(main.extract, "extract_from_email", fake_email)
+    with TestClient(main.app) as client:
+        client.post("/upload", files=[("files", ("r.png", PNG, "image/png")),
+                                      ("files", ("zoom.eml", make_eml(), "message/rfc822"))])
+        rows = {r["vendor"]: r for r in db.list_expenses()}
+        assert rows["Staples"]["total"] == 22.4 and rows["Staples"]["category_line"] == "8810"
+        assert rows["Zoom"]["source"] == "email" and rows["Zoom"]["email_subject"] == "Your Zoom receipt"
+        assert seen["n"] == 1 and "Zoom Pro" in seen["body"]
+
+        eid = rows["Staples"]["id"]
+        assert client.get(f"/expenses/{eid}").status_code == 200
+        r = client.post(f"/expenses/{eid}", data={
+            "vendor": "Staples", "expense_date": "2026-02-14", "total": "22.40", "gst": "1.00", "pst": "1.40",
+            "category_line": "8810", "business_pct": "100", "action": "confirm", "gst_number": "R123456789",
+        }, follow_redirects=False)
+        assert r.status_code == 303
+        assert db.get_expense(eid)["status"] == "confirmed"
+
+        s = client.get("/summary?year=2026")
+        assert s.status_code == 200 and "8810" in s.text
+        csv = client.get("/export/summary.csv?year=2026").text
+        assert "Office expenses" in csv and "21.4" in csv
+        z = client.get("/export/package.zip?year=2026")
+        assert z.status_code == 200 and z.content[:2] == b"PK"
+        assert client.get("/export/ledger.csv").status_code == 200
+
+
+def test_extraction_error_still_saves(app_env, monkeypatch):
+    db, main = app_env
+    monkeypatch.setattr(main.extract, "extraction_available", lambda: True)
+
+    def boom(data, media):
+        raise main.extract.ExtractionError("API down")
+
+    monkeypatch.setattr(main.extract, "extract_from_file", boom)
+    with TestClient(main.app) as client:
+        r = client.post("/upload", files=[("files", ("r.png", PNG, "image/png"))])
+        assert "API down" in r.text
+        assert db.list_expenses()[0]["confidence"] == "low"
+
+
+def test_settings_and_manual_entry(app_env):
+    db, main = app_env
+    with TestClient(main.app) as client:
+        r = client.post("/settings", data={"business_name": "AIG", "partner_a_name": "Nick", "partner_a_pct": "60",
+                                           "partner_b_name": "Marija", "partner_b_pct": "40", "gst_registered": "no"})
+        assert r.status_code == 200
+        assert db.get_settings()["partner_a_pct"] == "60"
+        bad = client.post("/settings", data={"business_name": "AIG", "partner_a_name": "Nick", "partner_a_pct": "60",
+                                             "partner_b_name": "Marija", "partner_b_pct": "60"})
+        assert bad.status_code == 400
+        r = client.post("/expenses/new", follow_redirects=False)
+        assert r.status_code == 303 and len(db.list_expenses()) == 1
+
+
+def test_receipt_path_traversal_blocked(app_env):
+    _, main = app_env
+    with TestClient(main.app) as client:
+        assert client.get("/receipts/..%2Fexpenses.db").status_code == 404
+
+
+def test_extract_schema_and_blocks():
+    from expenses import extract
+    assert extract._content_block(PNG, "image/png")["type"] == "image"
+    assert extract._content_block(b"%PDF-1.4", "application/pdf")["type"] == "document"
+    json.dumps(extract.SCHEMA)

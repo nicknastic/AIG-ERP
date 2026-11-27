@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}{{ e.vendor or "Expense" }}{% endblock %}
+{% block content %}
+<div class="split">
+  <div class="card receipt">
+    {% if e.source_file %}
+      {% if media.startswith("image/") and media not in ("image/heic", "image/heif") %}
+        <img src="/receipts/{{ e.source_file }}" alt="Receipt">
+      {% elif media == "application/pdf" %}
+        <iframe src="/receipts/{{ e.source_file }}"></iframe>
+      {% else %}
+        <p><a href="/receipts/{{ e.source_file }}">Open original file</a></p>
+      {% endif %}
+    {% else %}
+      <p class="muted">Entered by hand, no receipt attached.</p>
+    {% endif %}
+    {% if e.email_subject %}<p class="small"><strong>Email:</strong> {{ e.email_subject }}<br><span class="muted">{{ e.email_from }}</span></p>{% endif %}
+  </div>
+
+  <div class="card">
+    <h1>{{ e.vendor or "New expense" }} <span class="pill {{ e.status }}">{{ "Confirmed" if e.status == "confirmed" else "Review" }}</span></h1>
+    {% if e.notes %}<div class="notice small">{{ e.notes }}</div>{% endif %}
+    <form method="post" action="/expenses/{{ e.id }}">
+      <div class="grid">
+        <div><label>Vendor</label><input name="vendor" value="{{ e.vendor or '' }}"></div>
+        <div><label>Date</label><input type="date" name="expense_date" value="{{ e.expense_date or '' }}"></div>
+      </div>
+      <div style="margin-top:10px"><label>What was it for</label><input name="description" value="{{ e.description or '' }}"></div>
+      <div style="margin-top:10px"><label>CRA category (T2125 line)</label>
+        <select name="category_line">
+          {% for c in categories %}<option value="{{ c.line }}" {% if c.line == e.category_line %}selected{% endif %}>{{ c.line }} · {{ c.name }}{% if c.deductible_pct < 100 %} ({{ c.deductible_pct }}% deductible){% endif %}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="grid" style="margin-top:10px">
+        <div><label>Subtotal</label><input name="subtotal" inputmode="decimal" value="{{ e.subtotal if e.subtotal is not none else '' }}"></div>
+        <div><label>GST / HST</label><input name="gst" inputmode="decimal" value="{{ e.gst }}"></div>
+        <div><label>PST</label><input name="pst" inputmode="decimal" value="{{ e.pst }}"></div>
+        <div><label>Tip</label><input name="tip" inputmode="decimal" value="{{ e.tip }}"></div>
+        <div><label>Total paid</label><input name="total" inputmode="decimal" value="{{ e.total if e.total is not none else '' }}"></div>
+        <div><label>Currency</label><input name="currency" maxlength="3" value="{{ e.currency }}"></div>
+        <div><label>CAD per 1 {{ e.currency }}</label><input name="fx_rate" inputmode="decimal" value="{{ e.fx_rate }}"></div>
+        <div><label>Business use %</label><input type="number" min="0" max="100" name="business_pct" value="{{ e.business_pct }}"></div>
+      </div>
+      <div class="grid" style="margin-top:10px">
+        <div><label>Supplier GST/HST number</label><input name="gst_number" value="{{ e.gst_number or '' }}"></div>
+        <div><label>Payment method</label><input name="payment_method" value="{{ e.payment_method or '' }}"></div>
+        <div><label>Paid by</label>
+          <select name="paid_by">
+            {% for v, label in [("business", "Business account"), (settings.partner_a_name, settings.partner_a_name ~ " personally"), (settings.partner_b_name, settings.partner_b_name ~ " personally")] %}
+              <option value="{{ v }}" {% if e.paid_by == v %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:10px"><label>Notes</label><textarea name="notes" rows="2">{{ e.notes or '' }}</textarea></div>
+
+      <p class="small muted" style="margin-top:12px">
+        Deductible: <strong>{{ "%.2f"|format(c.deductible_cad) }} CAD</strong>
+        {% if settings.gst_registered == "yes" %} · GST/HST credit (ITC): <strong>{{ "%.2f"|format(c.itc_cad) }}</strong>{% endif %}
+        <br>Worked out from the last saved values.
+      </p>
+      <div class="row" style="margin-top:12px">
+        {% if e.status == "confirmed" %}
+          <button class="primary" name="action" value="save">Save</button>
+          <button name="action" value="unconfirm">Mark for review</button>
+        {% else %}
+          <button class="primary" name="action" value="confirm">Confirm and next</button>
+          <button name="action" value="save">Save</button>
+        {% endif %}
+        <a class="btn" href="/">Back</a>
+      </div>
+    </form>
+    <form method="post" action="/expenses/{{ e.id }}/delete" onsubmit="return confirm('Delete this expense and its receipt?')" style="margin-top:16px">
+      <button class="danger" type="submit">Delete</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
