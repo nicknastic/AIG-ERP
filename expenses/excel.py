@@ -5,13 +5,14 @@ changed or deleted, so it always matches what the app shows. Edit expenses in
 the app, not in the workbook: changes made directly in Excel are overwritten.
 """
 
+import io
 from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from . import db, tax
+from . import db, storage, tax
 from .categories import category_for
 
 HEADER_FILL = PatternFill("solid", fgColor="1F5F8B")
@@ -19,10 +20,10 @@ HEADER_FONT = Font(bold=True, color="FFFFFF")
 MONEY = '#,##0.00'
 
 
-def workbook_path(year: int) -> Path:
+def workbook_name(year: int) -> str:
     name = db.get_settings().get("business_name", "AIG").strip() or "AIG"
     safe = "".join(ch for ch in name if ch.isalnum() or ch in " -_").strip() or "AIG"
-    return db.excel_dir() / f"{safe} Expenses {year}.xlsx"
+    return f"{safe} Expenses {year}.xlsx"
 
 
 def _header(ws, headers: list[str], widths: list[int]) -> None:
@@ -57,15 +58,18 @@ def build(year: int) -> Workbook:
             cat.name, r["total"], r["gst"], r["pst"], r["tip"], r["currency"], c.total_cad,
             r["business_pct"] / 100, c.deductible_cad, r["paid_by"] or "", r["payment_method"] or "",
             "Confirmed" if r["status"] == "confirmed" else "To review",
-            Path(r["source_file"]).name if r["source_file"] else "", r["notes"] or "",
+            Path(r["source_path"] or "").name, r["notes"] or "",
         ])
         row = ws.max_row
         for col in (7, 8, 9, 10, 12, 14):
             ws.cell(row=row, column=col).number_format = MONEY
         ws.cell(row=row, column=13).number_format = "0%"
-        if r["source_file"] and Path(r["source_file"]).is_file():
+        link = r["source_url"]
+        if not link and r["source_path"] and Path(r["source_path"]).is_file():
+            link = Path(r["source_path"]).resolve().as_uri()
+        if link:
             cell = ws.cell(row=row, column=18)
-            cell.hyperlink = Path(r["source_file"]).resolve().as_uri()
+            cell.hyperlink = link
             cell.font = Font(color="1F5F8B", underline="single")
     ws.auto_filter.ref = ws.dimensions
 
@@ -95,15 +99,14 @@ def build(year: int) -> Workbook:
     return wb
 
 
-def write(year: int) -> Path:
-    path = workbook_path(year)
-    tmp = path.with_name(path.stem + ".tmp.xlsx")
-    try:
-        build(year).save(tmp)
-        tmp.replace(path)  # raises PermissionError on Windows if the file is open in Excel
-    finally:
-        tmp.unlink(missing_ok=True)
-    return path
+def to_bytes(year: int) -> bytes:
+    buf = io.BytesIO()
+    build(year).save(buf)
+    return buf.getvalue()
+
+
+def write(year: int) -> str:
+    return storage.write_excel(workbook_name(year), to_bytes(year))
 
 
 def write_safely(year: int | None) -> str | None:
@@ -113,8 +116,5 @@ def write_safely(year: int | None) -> str | None:
     try:
         write(year)
         return None
-    except PermissionError:
-        return ("Couldn't update the Excel file because it is open. Close it in Excel, "
-                "then use 'Update Excel now' in Settings.")
-    except OSError as e:
-        return f"Couldn't update the Excel file: {e}"
+    except storage.StorageError as e:
+        return str(e)

@@ -11,10 +11,11 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from starlette.middleware.sessions import SessionMiddleware
 from fastapi.templating import Jinja2Templates
 
-from . import db, emails, excel, extract, storage, tax
+from . import auth, db, emails, excel, extract, onedrive, storage, tax
 from .categories import CATEGORIES, category_for
 
 
@@ -25,6 +26,18 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="AIG expenses", lifespan=lifespan)
+app.include_router(auth.router)
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    blocked = auth.gate(request)
+    return blocked if blocked is not None else await call_next(request)
+
+
+# Added last so it runs first and the session is available to require_login.
+app.add_middleware(SessionMiddleware, secret_key=auth.session_secret(), https_only=auth.on_azure(),
+                   same_site="lax", max_age=60 * 60 * 24 * 60, session_cookie="aig_session")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.globals["categories"] = CATEGORIES
 templates.env.globals["category_for"] = category_for
@@ -32,6 +45,7 @@ templates.env.globals["category_for"] = category_for
 # Last problem writing the Excel file, shown at the top of every page until a write succeeds.
 _excel_status: dict[str, str | None] = {"warning": None}
 templates.env.globals["excel_warning"] = lambda: _excel_status["warning"]
+templates.env.globals["login_enabled"] = auth.enabled
 
 
 def refresh_excel(*years) -> None:
@@ -81,8 +95,12 @@ def ingest(raw: bytes, filename: str, declared_type: str | None) -> dict:
         return {"file": filename, "status": "duplicate", "id": existing["id"]}
 
     ext = Path(filename).suffix.lower() or mimetypes.guess_extension(declared_type or "") or ".jpg"
-    stored = storage.save_incoming(raw, digest, ".jpg" if ext == ".jpeg" else ext)
-    record: dict = {"source_file": str(stored), "source_hash": digest, "status": "review", "paid_by": "business"}
+    data = raw
+    if ext not in EMAIL_EXTS:
+        data, media = storage.normalize_image(raw, _media_type(filename, declared_type))
+        if media == "image/jpeg":
+            ext = ".jpg"
+    record: dict = {"source_hash": digest, "status": "review", "paid_by": "business"}
     error = None
 
     try:
@@ -97,10 +115,9 @@ def ingest(raw: bytes, filename: str, declared_type: str | None) -> dict:
                 )
                 record.update(_from_extraction(fields))
         else:
-            media = _media_type(filename, declared_type)
             record["source"] = "receipt"
             if extract.extraction_available():
-                record.update(_from_extraction(extract.extract_from_file(raw, media)))
+                record.update(_from_extraction(extract.extract_from_file(data, media)))
             elif media not in extract.IMAGE_TYPES | extract.HEIC_TYPES | {extract.PDF_TYPE}:
                 raise ValueError(f"Unsupported file type: {media}")
     except (extract.ExtractionError, ValueError, json.JSONDecodeError) as e:
@@ -112,9 +129,31 @@ def ingest(raw: bytes, filename: str, declared_type: str | None) -> dict:
         record["notes"] = "No Anthropic API key set, so fill in the details by hand."
     record.setdefault("source", "receipt")
     expense_id = db.insert_expense(record)
-    storage.file_into_place(expense_id)
+    _save_file(expense_id, data, ext)
     refresh_excel(record.get("expense_date"))
     return {"file": filename, "status": "error" if error else "added", "id": expense_id, "error": error}
+
+
+def _save_file(expense_id: int, data: bytes, ext: str) -> None:
+    """Save the receipt; if OneDrive is unreachable keep it on the server so nothing is lost."""
+    try:
+        storage.save_receipt(expense_id, data, ext)
+    except storage.StorageError as e:
+        fallback = db.DATA_DIR / "unsynced" / f"{expense_id}{ext}"
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        fallback.write_bytes(data)
+        row = db.get_expense(expense_id)
+        db.update_expense(expense_id, {
+            "source_file": str(fallback), "source_path": str(fallback),
+            "notes": ((row["notes"] or "") + f" Not saved to OneDrive yet ({e}); it will move there on the next save.").strip(),
+        })
+
+
+def _move_file(expense_id: int) -> None:
+    try:
+        storage.file_into_place(expense_id)
+    except storage.StorageError as e:
+        _excel_status["warning"] = f"Couldn't move the receipt file: {e}"
 
 
 # ---------- pages ----------
@@ -147,6 +186,11 @@ async def upload(request: Request, files: list[UploadFile] = File(...), next: st
     if next == "capture" and len(results) == 1 and results[0].get("id"):
         return RedirectResponse(f"/expenses/{results[0]['id']}?snapped={results[0]['status']}", status_code=303)
     return templates.TemplateResponse(request, "uploaded.html", {"results": results})
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
 
 
 @app.get("/snap", response_class=HTMLResponse)
@@ -206,8 +250,9 @@ def edit_expense(request: Request, expense_id: int, snapped: str = ""):
     if not row:
         raise HTTPException(404)
     settings = db.get_settings()
-    media = mimetypes.guess_type(row["source_file"] or "")[0] or ""
-    if (row["source_file"] or "").lower().endswith((".heic", ".heif")):
+    name = row["source_path"] or row["source_file"] or ""
+    media = mimetypes.guess_type(name)[0] or ""
+    if name.lower().endswith((".heic", ".heif")):
         media = "image/heic"
     return templates.TemplateResponse(request, "edit.html", {
         "e": row, "settings": settings, "media": media, "snapped": snapped,
@@ -261,7 +306,7 @@ def save_expense(
     elif action == "unconfirm":
         data["status"] = "review"
     db.update_expense(expense_id, data)
-    storage.file_into_place(expense_id)
+    _move_file(expense_id)
     refresh_excel(before["expense_date"], data["expense_date"])
     if action == "confirm":
         nxt = next((r for r in db.list_expenses(status="review") if r["id"] != expense_id), None)
@@ -276,8 +321,7 @@ def remove_expense(expense_id: int):
     row = db.get_expense(expense_id)
     if row:
         db.delete_expense(expense_id)
-        if row["source_file"]:
-            Path(row["source_file"]).unlink(missing_ok=True)
+        storage.delete_receipt(row)
         refresh_excel(row["expense_date"])
     return RedirectResponse("/", status_code=303)
 
@@ -285,9 +329,12 @@ def remove_expense(expense_id: int):
 @app.get("/expenses/{expense_id}/receipt")
 def receipt_file(expense_id: int):
     row = db.get_expense(expense_id)
-    if not row or not row["source_file"] or not Path(row["source_file"]).is_file():
+    data = storage.read_receipt(row) if row else None
+    if data is None:
         raise HTTPException(404)
-    return FileResponse(row["source_file"])
+    name = row["source_path"] or row["source_file"]
+    return Response(data, media_type=mimetypes.guess_type(name)[0] or "application/octet-stream",
+                    headers={"Cache-Control": "private, max-age=3600"})
 
 
 @app.get("/summary", response_class=HTMLResponse)
@@ -333,11 +380,10 @@ def export_package(year: str):
         z.writestr(f"t2125-summary-{y}.csv", "﻿" + tax.summary_csv(s, settings))
         z.writestr(f"expenses-{y}.csv", "﻿" + tax.ledger_csv(rows, settings))
         for r in rows:
-            if r["source_file"] and Path(r["source_file"]).is_file():
-                z.write(r["source_file"], f"receipts/{Path(r['source_file']).name}")
-        xlsx = io.BytesIO()
-        excel.build(y).save(xlsx)
-        z.writestr(excel.workbook_path(y).name, xlsx.getvalue())
+            content = storage.read_receipt(r)
+            if content is not None:
+                z.writestr(f"receipts/{Path(r['source_path'] or r['source_file']).name}", content)
+        z.writestr(excel.workbook_name(y), excel.to_bytes(y))
     return Response(
         buf.getvalue(), media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="expenses-{y}-package.zip"'},
@@ -349,13 +395,22 @@ def settings_page(request: Request, saved: str = "", error: str = ""):
     return templates.TemplateResponse(request, "settings.html", {
         "settings": db.get_settings(), "saved": saved, "error": error,
         "extraction": extract.extraction_available(),
-        "receipts_path": str(db.receipts_dir()), "excel_path": str(db.excel_dir()),
+        "receipts_path": storage.receipts_location(), "excel_path": storage.excel_location(),
+        "onedrive_connected": onedrive.connected(), "onedrive_account": onedrive.account(),
+        "login_enabled": auth.enabled(), "using_onedrive": storage.using_onedrive(),
+        "default_od_receipts": storage.DEFAULT_ONEDRIVE_RECEIPTS, "default_od_excel": storage.DEFAULT_ONEDRIVE_EXCEL,
     })
 
 
-def _check_folder(value: str) -> str | None:
+def _check_folder(value: str, use_onedrive: bool) -> str | None:
     """Return an error message if the folder can't be used."""
     if not value:
+        return None
+    if use_onedrive:
+        try:
+            onedrive.check_folder(value.replace("\\", "/"))
+        except onedrive.OneDriveError as e:
+            return f"Can't write to OneDrive folder {value}: {e}"
         return None
     p = Path(value).expanduser()
     if not p.is_absolute():
@@ -374,28 +429,36 @@ def _check_folder(value: str) -> str | None:
 def save_settings_route(
     business_name: str = Form(...), partner_a_name: str = Form(...), partner_a_pct: float = Form(...),
     partner_b_name: str = Form(...), partner_b_pct: float = Form(...), gst_registered: str = Form("no"),
-    receipts_folder: str = Form(""), excel_folder: str = Form(""),
+    receipts_folder: str = Form(""), excel_folder: str = Form(""), storage_choice: str = Form("", alias="storage"),
 ):
     if round(partner_a_pct + partner_b_pct, 4) != 100:
         raise HTTPException(400, "Partner shares must add up to 100%")
     receipts_folder, excel_folder = receipts_folder.strip().strip('"'), excel_folder.strip().strip('"')
+    current = db.get_settings()
+    storage_choice = storage_choice or current["storage"]
+    if storage_choice == "onedrive" and not onedrive.connected():
+        storage_choice = "local"
+    if auth.on_azure() and storage_choice != "onedrive" and (receipts_folder or excel_folder):
+        return RedirectResponse("/settings?" + urlencode(
+            {"error": "On Azure, connect OneDrive first: folders on the server aren't kept safe."}), status_code=303)
     for folder in (receipts_folder, excel_folder):
-        err = _check_folder(folder)
+        err = _check_folder(folder, storage_choice == "onedrive")
         if err:
             return RedirectResponse("/settings?" + urlencode({"error": err}), status_code=303)
-    old_receipts = db.receipts_dir().resolve()
+    old_location = storage.receipts_location()
     db.save_settings({
+        "storage": storage_choice,
         "receipts_folder": receipts_folder, "excel_folder": excel_folder,
         "business_name": business_name.strip(), "partner_a_name": partner_a_name.strip(),
         "partner_a_pct": f"{partner_a_pct:g}", "partner_b_name": partner_b_name.strip(),
         "partner_b_pct": f"{partner_b_pct:g}", "gst_registered": "yes" if gst_registered == "yes" else "no",
     })
     moved = 0
-    if db.receipts_dir().resolve() != old_receipts:
+    if storage.receipts_location() != old_location:
         # Bring existing receipts along so everything lives in the new folder.
         for r in db.list_expenses():
-            if r["source_file"] and Path(r["source_file"]).is_file():
-                storage.file_into_place(r["id"])
+            if r["source_file"]:
+                _move_file(r["id"])
                 moved += 1
     refresh_excel(*db.years())
     msg = "Saved." + (f" Moved {moved} receipt(s) to the new folder." if moved else "")
@@ -405,5 +468,5 @@ def save_settings_route(
 @app.post("/excel/rebuild")
 def rebuild_excel():
     refresh_excel(*(db.years() or [date.today().year]))
-    msg = _excel_status["warning"] or f"Excel updated in {db.excel_dir()}"
+    msg = _excel_status["warning"] or f"Excel updated in {storage.excel_location()}"
     return RedirectResponse("/settings?" + urlencode({"saved": msg}), status_code=303)

@@ -65,6 +65,7 @@ label { display:block; font-size:13px; color:var(--muted); margin-bottom:3px; }
   <a href="/">Expenses</a>
   <a href="/summary">Tax summary</a>
   <a href="/settings">Settings</a>
+  {% if request.session.get("user") %}<a href="/logout" class="muted small" title="{{ request.session.user.email }}">Sign out {{ request.session.user.name }}</a>{% endif %}
 </header>
 <main>
 {% if excel_warning() %}<div class="notice">{{ excel_warning() }}</div>{% endif %}

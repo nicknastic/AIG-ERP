@@ -48,12 +48,18 @@ the numbers each partner needs for their T2125 at tax time.
   package (.zip) with both CSVs plus every receipt file for the year.
 - **Duplicates**: uploading the same file twice is caught.
 
-The database stays in the `data/` folder; receipts and Excel files go to the
-folders chosen in Settings (default `data/receipts` and `data/excel`). CRA
+Receipts and Excel files go to the folders chosen in Settings: OneDrive when
+hosted on Azure, or folders on the computer when run locally (default
+`data/receipts` and `data/excel`). CRA
 expects records to be kept for six years, so pick a folder that is backed up,
 such as a OneDrive folder.
 
-## Run it
+## Hosted on Azure
+
+To use it from your phones anywhere, host it on Azure App Service with
+Microsoft sign-in and OneDrive storage. Step by step: [deploy/AZURE.md](deploy/AZURE.md).
+
+## Run it on your own computer
 
 You need Python 3.10 or newer.
 

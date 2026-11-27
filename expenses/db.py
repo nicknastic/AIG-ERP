@@ -12,7 +12,9 @@ CREATE TABLE IF NOT EXISTS expenses (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     source          TEXT NOT NULL,            -- 'receipt', 'email', 'manual'
-    source_file     TEXT,                     -- full path of the saved receipt file
+    source_file     TEXT,                     -- local path, or 'onedrive:<item id>'
+    source_path     TEXT,                     -- readable location, e.g. 'AIG Expenses/Receipts/2026/...jpg'
+    source_url      TEXT,                     -- link to open the file (OneDrive web link)
     source_hash     TEXT,                     -- sha256 of the original file, to catch duplicates
     email_subject   TEXT,
     email_from      TEXT,
@@ -53,9 +55,13 @@ DEFAULT_SETTINGS = {
     "partner_b_pct": "50",
     "gst_registered": "no",
     "province": "BC",
-    "receipts_folder": "",  # where receipt photos are saved; empty = data/receipts
-    "excel_folder": "",     # where the Excel workbook is kept; empty = data/excel
+    "receipts_folder": "",  # where receipt photos are saved; empty = default
+    "excel_folder": "",     # where the Excel workbook is kept; empty = default
+    "storage": "local",     # 'local' (folders on this computer) or 'onedrive'
 }
+
+# Stored in the settings table but never shown on a page or changed by the settings form.
+PRIVATE_SETTINGS = {"onedrive_refresh_token", "onedrive_account"}
 
 
 def db_path() -> Path:
@@ -64,16 +70,18 @@ def db_path() -> Path:
 
 def _folder(setting: str, default: Path) -> Path:
     value = get_settings().get(setting, "").strip()
-    d = Path(value).expanduser() if value else default
+    d = Path(value).expanduser() if value and Path(value).expanduser().is_absolute() else default
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def receipts_dir() -> Path:
+    """Local receipts folder (used when storage is 'local')."""
     return _folder("receipts_folder", DATA_DIR / "receipts")
 
 
 def excel_dir() -> Path:
+    """Local Excel folder (used when storage is 'local')."""
     return _folder("excel_folder", DATA_DIR / "excel")
 
 
@@ -92,16 +100,39 @@ def connect():
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(expenses)")}
+        for col in ("source_path", "source_url"):
+            if col not in cols:
+                conn.execute(f"ALTER TABLE expenses ADD COLUMN {col} TEXT")
         for k, v in DEFAULT_SETTINGS.items():
             conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (k, v))
 
 
 def get_settings() -> dict[str, str]:
+    """Public settings, safe to show on pages."""
     with connect() as conn:
         rows = conn.execute("SELECT key, value FROM settings").fetchall()
     s = dict(DEFAULT_SETTINGS)
-    s.update({r["key"]: r["value"] for r in rows})
+    s.update({r["key"]: r["value"] for r in rows if r["key"] not in PRIVATE_SETTINGS})
     return s
+
+
+def get_private(key: str) -> str | None:
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_private(key: str, value: str | None) -> None:
+    with connect() as conn:
+        if value is None:
+            conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+        else:
+            conn.execute(
+                "INSERT INTO settings(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
 
 
 def save_settings(values: dict[str, str]) -> None:
@@ -116,7 +147,7 @@ def save_settings(values: dict[str, str]) -> None:
 
 
 EXPENSE_FIELDS = [
-    "source", "source_file", "source_hash", "email_subject", "email_from", "vendor",
+    "source", "source_file", "source_path", "source_url", "source_hash", "email_subject", "email_from", "vendor",
     "expense_date", "description", "currency", "fx_rate", "subtotal", "gst", "pst", "tip", "total",
     "payment_method", "paid_by", "category_line", "business_pct", "gst_number", "status",
     "confidence", "notes", "raw_extraction",
