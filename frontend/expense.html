@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Expense · AIG</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Receipts">
+<meta name="theme-color" content="#1f5f8b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js"></script>
+</head>
+<body>
+<main>
+<div id="banner"></div>
+<div class="split">
+  <div class="card receipt" id="receipt"><p class="muted">Loading…</p></div>
+  <div class="card form-col">
+    <h1><span id="title">Expense</span> <span class="pill" id="statuspill"></span></h1>
+    <div class="notice small hidden" id="notes-banner"></div>
+    <form id="f">
+      <div class="grid">
+        <div><label>Vendor</label><input name="vendor"></div>
+        <div><label>Date</label><input type="date" name="expense_date"></div>
+      </div>
+      <div style="margin-top:10px"><label>What was it for</label><input name="description"></div>
+      <div style="margin-top:10px"><label>Expense type</label>
+        <select name="category_line" id="cat"></select>
+        <div class="small muted" style="margin-top:3px" id="craname"></div>
+      </div>
+      <div class="grid" style="margin-top:10px">
+        <div><label>Subtotal</label><input name="subtotal" inputmode="decimal"></div>
+        <div><label id="gstlabel">GST / HST</label><input name="gst" inputmode="decimal"></div>
+        <div><label>PST</label><input name="pst" inputmode="decimal"></div>
+        <div><label>Tip</label><input name="tip" inputmode="decimal"></div>
+        <div><label>Total paid</label><input name="total" inputmode="decimal"></div>
+        <div><label>Currency</label><input name="currency" maxlength="3"></div>
+        <div><label>CAD per 1 unit</label><input name="fx_rate" inputmode="decimal"></div>
+        <div><label>Business use %</label><input type="number" min="0" max="100" name="business_pct"></div>
+      </div>
+      <div class="grid" style="margin-top:10px">
+        <div id="gstnobox"><label>Supplier GST/HST number</label><input name="gst_number"></div>
+        <div><label>Payment method</label><input name="payment_method"></div>
+        <div><label>Paid by</label><select name="paid_by" id="paidby"></select></div>
+      </div>
+      <div style="margin-top:10px"><label>Notes</label><textarea name="notes" rows="2"></textarea></div>
+      <p class="small muted" style="margin-top:12px" id="calc"></p>
+      <div class="row" style="margin-top:12px" id="buttons"></div>
+    </form>
+    <button class="danger" id="del" style="margin-top:16px">Delete</button>
+  </div>
+</div>
+</main>
+<script>
+const { $, api, post, esc, money, toast, params } = AIG;
+AIG.header("");
+const id = params.get("id");
+let cfg, nextReview;
+const FIELDS = ["vendor","expense_date","description","category_line","subtotal","gst","pst","tip","total","currency","fx_rate","business_pct","gst_number","payment_method","paid_by","notes"];
+
+function render(e) {
+  const f = $("#f");
+  for (const k of FIELDS) if (f.elements[k]) f.elements[k].value = e[k] ?? "";
+  $("#title").textContent = e.vendor || "New expense";
+  $("#statuspill").className = "pill " + e.status;
+  $("#statuspill").textContent = e.status === "confirmed" ? "Confirmed" : "Review";
+  $("#craname").textContent = "On the tax form: line " + e.category_line + ", " + e.cra_name;
+  $("#notes-banner").textContent = e.notes || ""; $("#notes-banner").classList.toggle("hidden", !e.notes);
+  const reg = cfg.settings.gst_registered === "yes";
+  $("#calc").innerHTML = `Deductible: <strong>${money(e.deductible_cad)} CAD</strong>` + (reg ? ` · GST/HST credit: <strong>${money(e.itc_cad)}</strong>` : "") + "<br>Worked out from the last saved values.";
+  $("#buttons").innerHTML = e.status === "confirmed"
+    ? '<button class="primary" value="save">Save</button><button value="unconfirm">Mark for review</button><a class="btn" href="/expenses.html">Back</a>'
+    : '<button class="primary" value="confirm">Confirm and next</button><button value="save">Save</button><a class="btn" href="/expenses.html">Back</a>';
+  const r = $("#receipt");
+  if (!e.has_receipt) { r.innerHTML = '<p class="muted">Entered by hand, no receipt attached.</p>'; }
+  else {
+    const src = "/api/expenses/" + e.id + "/receipt";
+    const name = (e.receipt_name || "").toLowerCase();
+    let view;
+    if (name.endsWith(".pdf")) view = `<iframe src="${src}"></iframe>`;
+    else if (/\.(jpe?g|png|webp|gif)$/.test(name)) view = `<a href="${src}" target="_blank"><img src="${src}" alt="Receipt"></a>`;
+    else view = `<p><a href="${src}">Open original file</a></p>`;
+    r.innerHTML = view + `<p class="small muted" style="word-break:break-all">Saved as ${esc(e.source_path || "")}${e.source_url ? ` · <a href="${esc(e.source_url)}" target="_blank">open in OneDrive</a>` : ""}</p>`
+      + (e.email_subject ? `<p class="small"><strong>Email:</strong> ${esc(e.email_subject)}<br><span class="muted">${esc(e.email_from || "")}</span></p>` : "")
+      + (e.added_by && e.added_by !== "local" ? `<p class="small muted">Added by ${esc(e.added_by)}</p>` : "");
+  }
+}
+
+async function init() {
+  cfg = await api("/config");
+  $("#biz").textContent = cfg.settings.business_name + " expenses";
+  const reg = cfg.settings.gst_registered === "yes";
+  $("#gstnobox").classList.toggle("hidden", !reg);
+  if (!reg) $("#gstlabel").textContent = "GST / HST (part of the cost)";
+  $("#cat").innerHTML = cfg.categories.map((c) => `<option value="${c.line}">${esc(c.type)} (CRA line ${c.line})${c.deductible_pct < 100 ? ", " + c.deductible_pct + "% deductible" : ""}</option>`).join("");
+  const s = cfg.settings;
+  $("#paidby").innerHTML = [["business", "Business account"], [s.partner_a_name, s.partner_a_name + " personally"], [s.partner_b_name, s.partner_b_name + " personally"]]
+    .map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("");
+  const d = await api("/expenses/" + id);
+  nextReview = d.next_review;
+  render(d.expense);
+  const snapped = params.get("snapped");
+  const msgs = {
+    added: `Receipt saved${d.expense.vendor ? " and read as <strong>" + esc(d.expense.type) + "</strong>" : ""}. Check the details and tap Confirm.`,
+    duplicate: "This photo was already uploaded, so here is the existing expense.",
+    error: "The photo was saved but couldn't be read automatically. Please fill in the details.",
+  };
+  if (msgs[snapped]) $("#banner").innerHTML = `<div class="notice"${snapped === "added" ? ' style="border-color:var(--ok)"' : ""}>${msgs[snapped]}</div>`;
+}
+
+$("#f").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const action = ev.submitter?.value || "save";
+  const body = Object.fromEntries(new FormData($("#f")));
+  body.action = action;
+  const btns = [...document.querySelectorAll("#buttons button")]; btns.forEach((b) => b.disabled = true);
+  try {
+    const d = await post("/expenses/" + id, body);
+    if (action === "confirm") { location.href = d.next_review ? "/expense.html?id=" + d.next_review : "/expenses.html"; return; }
+    render(d.expense); $("#banner").innerHTML = ""; toast("Saved");
+  } catch (e) { toast(e.message, 6000); }
+  btns.forEach((b) => b.disabled = false);
+});
+$("#del").onclick = async () => {
+  if (!confirm("Delete this expense and its receipt?")) return;
+  await api("/expenses/" + id, { method: "DELETE" });
+  location.href = "/expenses.html";
+};
+init().catch((e) => toast(e.message, 6000));
+</script>
+</body>
+</html>

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Snap receipt · AIG</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Receipts">
+<meta name="theme-color" content="#1f5f8b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js"></script>
+</head>
+<body>
+<main>
+  <div class="notice small hidden" id="noread">Automatic reading is off, so you'll type the details after taking the photo.</div>
+  <label class="snap-btn" id="snap">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8a2 2 0 0 1 2-2h2.5l1.5-2h6l1.5 2H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="4"/></svg>
+    Take a photo of the receipt
+    <input id="photo" type="file" accept="image/*" capture="environment">
+  </label>
+  <div class="busy" id="busy"><div class="spinner"></div><span id="busytext">Reading the receipt…</span><div class="small muted">This takes a few seconds.</div></div>
+  <p class="row" style="justify-content:center; margin:14px 0">
+    <label class="btn" id="pickbtn">Choose from photos instead<input id="pick" type="file" accept="image/*,application/pdf" class="hidden"></label>
+  </p>
+  <div class="card hidden" id="recentcard"><h2>Recent</h2><ul class="list-plain" id="recent"></ul></div>
+</main>
+<script>
+const { $, api, esc, money, uploadOne, toast } = AIG;
+AIG.header("/");
+async function send(file) {
+  if (!file) return;
+  $("#snap").classList.add("hidden"); $("#busy").classList.add("on");
+  try {
+    const r = await uploadOne(file);
+    if (r.id) location.href = "/expense.html?id=" + r.id + "&snapped=" + r.status;
+    else throw new Error(r.error || "Upload failed");
+  } catch (e) {
+    $("#snap").classList.remove("hidden"); $("#busy").classList.remove("on");
+    toast("Couldn't save the photo: " + e.message, 6000);
+  }
+}
+$("#photo").addEventListener("change", (e) => send(e.target.files[0]));
+$("#pick").addEventListener("change", (e) => send(e.target.files[0]));
+api("/config").then((c) => { if (!c.extraction) $("#noread").classList.remove("hidden"); $("#biz").textContent = c.settings.business_name + " expenses"; });
+api("/expenses").then((d) => {
+  const items = d.expenses.slice(0, 5);
+  if (!items.length) return;
+  $("#recentcard").classList.remove("hidden");
+  $("#recent").innerHTML = items.map((e) => `<li><a href="/expense.html?id=${e.id}">
+    <span>${esc(e.vendor || "(not read)")}<br><span class="small muted">${esc(e.expense_date || "")} · ${esc(e.type)}</span></span>
+    <span style="text-align:right">${money(e.total)}<br><span class="pill ${e.status}">${e.status === "confirmed" ? "Confirmed" : "Review"}</span></span></a></li>`).join("");
+}).catch((e) => toast(e.message, 6000));
+</script>
+</body>
+</html>

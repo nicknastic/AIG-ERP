@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Expenses · AIG</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Receipts">
+<meta name="theme-color" content="#1f5f8b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js"></script>
+</head>
+<body>
+<main>
+<div class="card">
+  <h2>Add receipts</h2>
+  <div class="drop">
+    <p>Photos or PDFs of receipts, and saved emails (.eml or .msg). You can pick many at once.</p>
+    <input type="file" id="files" multiple accept="image/*,.heic,.heif,application/pdf,.pdf,.eml,.msg,message/rfc822">
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button class="primary" id="upload">Upload and read</button>
+    <span class="muted small">or</span>
+    <button id="manual">Enter one by hand</button>
+    <span class="small muted" id="progress"></span>
+  </div>
+  <div id="results" class="small" style="margin-top:8px"></div>
+</div>
+<div class="card">
+  <div class="row" style="justify-content:space-between; margin-bottom:10px">
+    <h2 style="margin:0">Expenses <span class="pill review hidden" id="reviewcount"></span></h2>
+    <div class="row">
+      <select id="year" style="width:auto"><option value="">All years</option></select>
+      <select id="status" style="width:auto"><option value="">Any status</option><option value="review">To review</option><option value="confirmed">Confirmed</option></select>
+      <a class="btn" id="csv" href="/api/export/ledger.csv">Download CSV</a>
+    </div>
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Date</th><th>Vendor</th><th class="hide-sm">Expense type</th><th class="num">Total</th><th class="num">Deductible</th><th>Status</th></tr></thead>
+    <tbody id="rows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+  </table>
+  </div>
+</div>
+</main>
+<script>
+const { $, api, esc, money, uploadOne, toast, params } = AIG;
+AIG.header("/expenses.html");
+$("#year").value = params.get("year") || ""; $("#status").value = params.get("status") || "";
+async function load() {
+  const q = new URLSearchParams({ year: $("#year").value, status: $("#status").value });
+  const d = await api("/expenses?" + q);
+  const ysel = $("#year"), cur = ysel.value;
+  ysel.innerHTML = '<option value="">All years</option>' + d.years.map((y) => `<option>${y}</option>`).join("");
+  ysel.value = cur;
+  $("#csv").href = "/api/export/ledger.csv" + (cur ? "?year=" + cur : "");
+  const review = d.expenses.filter((e) => e.status !== "confirmed").length;
+  $("#reviewcount").textContent = review + " to review"; $("#reviewcount").classList.toggle("hidden", !review);
+  $("#rows").innerHTML = d.expenses.length ? d.expenses.map((e) => `<tr class="clickable" onclick="location.href='/expense.html?id=${e.id}'">
+      <td>${esc(e.expense_date || "?")}</td>
+      <td>${esc(e.vendor || e.email_subject || "(not read yet)")}<div class="muted small">${esc(e.description || "")}</div></td>
+      <td class="hide-sm small">${esc(e.type)}<div class="muted">CRA line ${e.category_line}</div></td>
+      <td class="num">${money(e.total)}${e.currency !== "CAD" ? " " + esc(e.currency) : ""}</td>
+      <td class="num">${money(e.deductible_cad)}</td>
+      <td><span class="pill ${e.status}">${e.status === "confirmed" ? "Confirmed" : "Review"}</span>${e.confidence === "low" ? ' <span class="pill low">check</span>' : ""}</td>
+    </tr>`).join("") : '<tr><td colspan="6" class="muted">No expenses yet.</td></tr>';
+}
+$("#year").onchange = load; $("#status").onchange = load;
+$("#upload").onclick = async () => {
+  const files = [...$("#files").files];
+  if (!files.length) return toast("Pick some files first");
+  const out = [];
+  for (const [i, f] of files.entries()) {
+    $("#progress").textContent = `Reading ${i + 1} of ${files.length}…`;
+    try { const r = await uploadOne(f); out.push({ ...r, file: f.name }); }
+    catch (e) { out.push({ file: f.name, status: "error", error: e.message }); }
+  }
+  $("#progress").textContent = ""; $("#files").value = "";
+  $("#results").innerHTML = out.map((r) => `<div>${esc(r.file)}: ${r.status === "added" ? "added" : r.status === "duplicate" ? "already uploaded" : "needs attention " + esc(r.error || "")}
+    ${r.id ? ` <a href="/expense.html?id=${r.id}">review</a>` : ""}</div>`).join("");
+  load();
+};
+$("#manual").onclick = async () => { const r = await api("/expenses", { method: "POST" }); location.href = "/expense.html?id=" + r.id; };
+api("/config").then((c) => $("#biz").textContent = c.settings.business_name + " expenses");
+load().catch((e) => toast(e.message, 6000));
+</script>
+</body>
+</html>
