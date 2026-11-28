@@ -205,3 +205,15 @@ def test_graph_store_paths():
     assert s._path_url("AIG Expenses/Receipts/2026/a b.jpg").endswith(":/AIG%20Expenses/Receipts/2026/a%20b.jpg:")
     u = GraphStore("t", "c", "s", user="nick@adriaticintelligence.com")
     assert "/users/nick%40adriaticintelligence.com/drive" in u.base
+
+
+def test_azure_without_graph_settings_refuses_local_files(monkeypatch):
+    import pytest
+    from aig import store
+    store.reset_store()
+    for k in ("GRAPH_CLIENT_ID", "AIG_LOCAL_ROOT"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("WEBSITE_INSTANCE_ID", "x")
+    with pytest.raises(store.StoreError):
+        store.get_store()
+    store.reset_store()

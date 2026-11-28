@@ -217,6 +217,10 @@ def get_store():
             _store = GraphStore(os.environ["GRAPH_TENANT_ID"], os.environ["GRAPH_CLIENT_ID"],
                                 os.environ["GRAPH_CLIENT_SECRET"], user=os.environ.get("ONEDRIVE_USER", ""),
                                 site_id=os.environ.get("SHAREPOINT_SITE_ID", ""))
+        elif os.environ.get("WEBSITE_SITE_NAME") or os.environ.get("WEBSITE_INSTANCE_ID"):
+            # On Azure a local folder is thrown away on restart, so never fall back to one.
+            raise StoreError("The app isn't connected to SharePoint: GRAPH_CLIENT_ID is not set "
+                             "in the Static Web App's environment variables.")
         else:
             _store = LocalStore(os.environ.get("AIG_LOCAL_ROOT", Path.cwd() / "data"))
     return _store
