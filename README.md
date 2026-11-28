@@ -39,7 +39,7 @@ use **Share > Add to Home Screen** so it opens like an app.
 | Folder | What |
 |---|---|
 | `frontend/` | The website (HTML, CSS, JavaScript) and `staticwebapp.config.json` |
-| `api/` | Python API run by Azure Functions: `function_app.py` and the `aig` package |
+| `api/` | Python API run by Azure Functions: `proxy/` (one catch-all function) and the `aig` package |
 | `tests/` | `pytest` tests |
 | `deploy/AZURE.md` | Azure resources, settings and deployment |
 
